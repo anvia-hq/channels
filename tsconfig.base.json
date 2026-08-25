@@ -9,6 +9,7 @@
       "@anvia/channel": ["packages/channel/src/index.ts"],
       "@anvia/channel-agent": ["packages/channel-agent/src/index.ts"],
       "@anvia/discord": ["packages/discord/src/index.ts"],
+      "@anvia/slack": ["packages/slack/src/index.ts"],
       "@anvia/telegram": ["packages/telegram/src/index.ts"]
     },
     "strict": true,

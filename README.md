@@ -7,18 +7,20 @@ proactive outbound messages from monitors, workers, and application code.
 
 ## Status
 
-This repository is in initial development. The Telegram package includes its first long-polling
-transport, and the channel-agent package provides the initial Anvia execution and streaming bridge.
-Packages remain private until the vertical slice has been exercised against a live bot.
+This repository is in initial development. Telegram, Discord, and Slack adapters are implemented,
+and the channel-agent package provides the initial Anvia execution and streaming bridge. Packages
+remain private until each vertical slice has been exercised against a live bot.
 
 ## Workspace
 
 - `@anvia/channel`: platform-neutral channel contracts.
 - `@anvia/channel-agent`: integration between channel events and `@anvia/core` agents.
 - `@anvia/discord`: Discord Gateway and messaging adapter.
+- `@anvia/slack`: Slack Socket Mode and Web API adapter.
 - `@anvia/telegram`: Telegram long-polling transport and text messaging adapter.
 
-Slack will be added after the Discord vertical slice has been exercised with a live bot.
+The first adapters are implemented and awaiting live credential-based verification before
+publishing.
 
 ## Development
 
@@ -50,4 +52,12 @@ The equivalent Discord example is available in [`examples/discord-agent`](./exam
 cp examples/discord-agent/.env.example examples/discord-agent/.env
 # Fill in DISCORD_BOT_TOKEN and OPENAI_API_KEY.
 pnpm example:discord
+```
+
+The Slack Socket Mode example is available in [`examples/slack-agent`](./examples/slack-agent):
+
+```sh
+cp examples/slack-agent/.env.example examples/slack-agent/.env
+# Fill in SLACK_APP_TOKEN, SLACK_BOT_TOKEN, and OPENAI_API_KEY.
+pnpm example:slack
 ```

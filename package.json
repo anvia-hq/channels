@@ -12,6 +12,7 @@
     "check": "pnpm format:check && pnpm lint",
     "check:fix": "pnpm lint:fix && pnpm format",
     "example:discord": "pnpm --filter @anvia/example-discord-agent start",
+    "example:slack": "pnpm --filter @anvia/example-slack-agent start",
     "example:telegram": "pnpm --filter @anvia/example-telegram-agent start",
     "format": "oxfmt .",
     "format:check": "oxfmt --check .",
