@@ -1,0 +1,22 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "plugins": ["typescript", "unicorn", "oxc"],
+  "categories": {
+    "correctness": "error"
+  },
+  "rules": {
+    "eslint/no-useless-constructor": "error",
+    "typescript/no-explicit-any": "error"
+  },
+  "ignorePatterns": [
+    "node_modules",
+    "dist",
+    "**/dist",
+    "coverage",
+    "**/coverage",
+    "pnpm-lock.yaml"
+  ],
+  "env": {
+    "builtin": true
+  }
+}

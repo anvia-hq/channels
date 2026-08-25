@@ -1,0 +1,36 @@
+{
+  "name": "@anvia/channel-agent",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Anvia agent integration for communication channels.",
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsup src/index.ts --format esm --dts --sourcemap --clean",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@anvia/core": "^1.0.2",
+    "tsup": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  },
+  "dependencies": {
+    "@anvia/channel": "workspace:*"
+  },
+  "peerDependencies": {
+    "@anvia/core": "^1.0.2"
+  }
+}

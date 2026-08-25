@@ -1,0 +1,22 @@
+{
+  "name": "@anvia/example-discord-agent",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc --noEmit",
+    "start": "tsx --env-file=.env src/index.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "tsx": "catalog:",
+    "typescript": "catalog:"
+  },
+  "dependencies": {
+    "@anvia/channel-agent": "workspace:*",
+    "@anvia/core": "^1.0.2",
+    "@anvia/discord": "workspace:*",
+    "@anvia/memory-sqlite": "^1.0.2",
+    "@anvia/openai": "^1.0.2"
+  }
+}

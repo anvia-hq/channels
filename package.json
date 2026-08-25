@@ -1,0 +1,32 @@
+{
+  "name": "anvia-channels",
+  "version": "0.0.0",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "build": "pnpm -r --if-present build",
+    "check": "pnpm format:check && pnpm lint",
+    "check:fix": "pnpm lint:fix && pnpm format",
+    "example:discord": "pnpm --filter @anvia/example-discord-agent start",
+    "example:telegram": "pnpm --filter @anvia/example-telegram-agent start",
+    "format": "oxfmt .",
+    "format:check": "oxfmt --check .",
+    "lint": "oxlint .",
+    "lint:fix": "oxlint --fix .",
+    "test": "pnpm -r --if-present test",
+    "typecheck": "pnpm -r --if-present typecheck"
+  },
+  "devDependencies": {
+    "@types/node": "^24.9.1",
+    "oxfmt": "0.64.0",
+    "oxlint": "^1.79.0",
+    "tsup": "^8.5.0",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.11"
+  },
+  "packageManager": "pnpm@11.0.4"
+}
