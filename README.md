@@ -17,10 +17,32 @@ remain private until each vertical slice has been exercised against a live bot.
 - `@anvia/channel-agent`: integration between channel events and `@anvia/core` agents.
 - `@anvia/discord`: Discord Gateway and messaging adapter.
 - `@anvia/slack`: Slack Socket Mode and Web API adapter.
-- `@anvia/telegram`: Telegram long-polling transport and text messaging adapter.
+- `@anvia/telegram`: Telegram long-polling transport and messaging adapter.
 
 The first adapters are implemented and awaiting live credential-based verification before
 publishing.
+
+Inbound images and files are normalized across Discord, Slack, and Telegram. `@anvia/channel-agent`
+loads them through the originating adapter and constructs an Anvia multimodal prompt automatically.
+
+## Proactive delivery
+
+Monitors, workers, and application services can send without starting an agent bridge. Use the
+multi-part helper so long output is split according to the selected platform:
+
+```ts
+import { sendChannelMessage } from "@anvia/channel";
+import { telegram } from "@anvia/telegram";
+
+const channel = telegram({ token: process.env.TELEGRAM_BOT_TOKEN! });
+await sendChannelMessage(
+  channel,
+  { platform: "telegram", conversationId: "-1001234567890" },
+  { text: monitoringReport },
+);
+```
+
+`Channel.send()` remains the low-level operation for exactly one platform-sized message.
 
 ## Development
 

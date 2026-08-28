@@ -11,6 +11,8 @@ export type {
   TelegramGetUpdatesRequest,
   TelegramMessage,
   TelegramMessageEntity,
+  TelegramMediaFile,
+  TelegramPhotoSize,
   TelegramSendMessageRequest,
   TelegramUpdate,
   TelegramUser,

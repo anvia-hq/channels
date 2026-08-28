@@ -6,6 +6,7 @@ without a public HTTP endpoint, while the Web API sends and edits text messages.
 ## Usage
 
 ```ts
+import { sendChannelMessage } from "@anvia/channel";
 import { slack } from "@anvia/slack";
 
 const channel = slack({
@@ -17,7 +18,8 @@ const channel = slack({
 });
 
 await channel.start(async (event) => {
-  await channel.send(
+  await sendChannelMessage(
+    channel,
     {
       platform: "slack",
       accountId: event.accountId,
@@ -39,6 +41,7 @@ bot token containing these scopes:
 
 - `app_mentions:read`
 - `chat:write`
+- `files:read`
 - `im:history`
 
 Subscribe the bot to `app_mention` and `message.im`. This provides direct-message and explicit
@@ -50,3 +53,10 @@ Socket envelopes are acknowledged before application processing and duplicate de
 suppressed by workspace, channel, and message timestamp. Slack threads map to `threadId`. Outbound
 Slack control mentions such as `<@U123>` and `<!channel>` are escaped so generated text cannot
 unexpectedly notify workspace members.
+
+Incoming images and other files are normalized and downloaded with the bot token only when an
+application or agent loads them. The authenticated Slack URL is not exposed to the model. Downloads
+are limited to 20 MiB by default; set `maximumAttachmentBytes` to choose a different application
+limit.
+`sendChannelMessage` splits long text into ordered messages at Slack's boundary; `channel.send`
+sends one atomic message and rejects oversized text.

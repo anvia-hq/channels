@@ -1,11 +1,12 @@
 # `@anvia/discord`
 
-Discord Gateway and text messaging adapter for Anvia Channels. It receives message-create events
-through `discord.js` and sends or edits messages through Discord's rate-limit-aware REST client.
+Discord Gateway and messaging adapter for Anvia Channels. It receives message-create events
+through `discord.js` and sends or edits text through Discord's rate-limit-aware REST client.
 
 ## Usage
 
 ```ts
+import { sendChannelMessage } from "@anvia/channel";
 import { discord } from "@anvia/discord";
 
 const channel = discord({
@@ -16,7 +17,8 @@ const channel = discord({
 });
 
 await channel.start(async (event) => {
-  await channel.send(
+  await sendChannelMessage(
+    channel,
     {
       platform: "discord",
       accountId: event.accountId,
@@ -37,4 +39,8 @@ a mention-only guild bot, set `messageContentIntent: false`; Discord still provi
 and messages that mention the bot.
 
 Incoming Discord threads are represented by a parent `conversationId` and their own `threadId`.
+Incoming images, audio, video, and other files are exposed as normalized attachments. Attachment
+loading returns Discord's HTTPS CDN URL without downloading the file into application memory.
 Outbound mentions are disabled so agent-generated text cannot unexpectedly ping users or roles.
+`sendChannelMessage` splits long text into ordered messages at Discord's boundary; `channel.send`
+sends one atomic message and rejects oversized text.

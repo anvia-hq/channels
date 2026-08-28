@@ -6,6 +6,7 @@ export { normalizeDiscordMessage } from "./normalize.js";
 export { isDiscordSnowflake, validateDiscordSnowflake } from "./snowflake.js";
 export type {
   DiscordGateway,
+  DiscordGatewayAttachment,
   DiscordGatewayHandler,
   DiscordGatewayMessage,
   DiscordGatewaySentMessage,

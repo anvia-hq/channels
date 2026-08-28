@@ -5,12 +5,21 @@ export type DiscordGatewayUser = Readonly<{
   bot: boolean;
 }>;
 
+export type DiscordGatewayAttachment = Readonly<{
+  id: string;
+  url: string;
+  filename: string;
+  mediaType?: string;
+  size: number;
+}>;
+
 export type DiscordGatewayMessage = Readonly<{
   id: string;
   channelId: string;
   guildId?: string;
   parentChannelId?: string;
   content: string;
+  attachments: readonly DiscordGatewayAttachment[];
   author: DiscordGatewayUser;
   bot: DiscordGatewayUser;
   memberDisplayName?: string;

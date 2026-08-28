@@ -1,3 +1,5 @@
+import type { ChannelAttachmentData } from "@anvia/channel";
+
 export type TelegramChatType = "private" | "group" | "supergroup" | "channel";
 
 export type TelegramUser = Readonly<{
@@ -26,6 +28,20 @@ export type TelegramMessageEntity = Readonly<{
   user?: TelegramUser;
 }>;
 
+export type TelegramPhotoSize = Readonly<{
+  file_id: string;
+  width: number;
+  height: number;
+  file_size?: number;
+}>;
+
+export type TelegramMediaFile = Readonly<{
+  file_id: string;
+  file_name?: string;
+  mime_type?: string;
+  file_size?: number;
+}>;
+
 export type TelegramMessage = Readonly<{
   message_id: number;
   message_thread_id?: number;
@@ -33,6 +49,13 @@ export type TelegramMessage = Readonly<{
   chat: TelegramChat;
   text?: string;
   entities?: readonly TelegramMessageEntity[];
+  caption?: string;
+  caption_entities?: readonly TelegramMessageEntity[];
+  photo?: readonly TelegramPhotoSize[];
+  document?: TelegramMediaFile;
+  audio?: TelegramMediaFile;
+  video?: TelegramMediaFile;
+  voice?: TelegramMediaFile;
   reply_to_message?: TelegramMessage;
 }>;
 
@@ -71,4 +94,5 @@ export interface TelegramBotApi {
     request: TelegramEditMessageTextRequest,
     signal?: AbortSignal,
   ): Promise<TelegramMessage | true>;
+  downloadFile(fileId: string, signal?: AbortSignal): Promise<ChannelAttachmentData>;
 }

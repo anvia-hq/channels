@@ -2,6 +2,8 @@ import type { AgentOutcome, Usage } from "@anvia/core";
 import type {
   Channel,
   ChannelAddress,
+  ChannelAttachment,
+  ChannelAttachmentData,
   ChannelEventHandler,
   ChannelMessage,
   ChannelMessageEvent,
@@ -14,8 +16,31 @@ export class FakeChannel implements Channel {
   readonly edits: Array<{ sent: SentChannelMessage; message: ChannelMessage }> = [];
   startCount = 0;
   stopCount = 0;
+  splitCount = 0;
   stopError: unknown = undefined;
   private handler: ChannelEventHandler | undefined;
+  readonly attachmentData = new Map<string, ChannelAttachmentData>();
+
+  constructor(private readonly maximumMessageLength = Number.MAX_SAFE_INTEGER) {}
+
+  splitMessage(message: ChannelMessage): readonly ChannelMessage[] {
+    this.splitCount += 1;
+    const parts: ChannelMessage[] = [];
+    for (let start = 0; start < message.text.length; start += this.maximumMessageLength) {
+      parts.push({ text: message.text.slice(start, start + this.maximumMessageLength) });
+    }
+    return parts;
+  }
+
+  async loadAttachment(
+    _event: ChannelMessageEvent,
+    attachment: ChannelAttachment,
+    _signal?: AbortSignal,
+  ): Promise<ChannelAttachmentData> {
+    const data = this.attachmentData.get(attachment.id);
+    if (data === undefined) throw new Error(`Missing fake attachment: ${attachment.id}`);
+    return data;
+  }
 
   async start(handler: ChannelEventHandler): Promise<void> {
     this.startCount += 1;
@@ -50,6 +75,7 @@ export type MessageEventOverrides = Readonly<{
   sender?: ChannelMessageEvent["sender"];
   text?: string;
   mentionedBot?: boolean;
+  attachments?: ChannelMessageEvent["attachments"];
 }>;
 
 export function messageEvent(overrides: MessageEventOverrides = {}): ChannelMessageEvent {
@@ -61,6 +87,7 @@ export function messageEvent(overrides: MessageEventOverrides = {}): ChannelMess
     conversation: overrides.conversation ?? { id: "chat-1", kind: "direct" },
     sender: overrides.sender ?? { id: "user-1", displayName: "User", bot: false },
     text: overrides.text ?? "hello",
+    attachments: overrides.attachments ?? [],
     mentionedBot: overrides.mentionedBot ?? false,
     raw: {},
   };
@@ -85,6 +112,33 @@ export function agentResponse<Output = string>(
     output: output ?? (text as Output),
     usage,
     messages: [],
+  };
+}
+
+export function agentApproval(runId = "run-1"): AgentOutcome<string> {
+  const interaction = {
+    type: "tool-approval" as const,
+    id: "interaction-1",
+    toolName: "send_email",
+    toolCallId: "tool-call-1",
+    internalCallId: "internal-call-1",
+    input: { recipient: "person@example.com" },
+    reason: "This sends an external message.",
+  };
+  return {
+    type: "interaction",
+    runId,
+    text: "",
+    usage,
+    messages: [],
+    interaction,
+    continuation: {
+      version: 1,
+      agentId: "agent",
+      sourceRunId: runId,
+      interaction,
+      state: {},
+    },
   };
 }
 

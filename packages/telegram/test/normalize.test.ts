@@ -26,9 +26,26 @@ describe("normalizeTelegramUpdate", () => {
       conversation: { id: "5", kind: "direct" },
       sender: { id: "7", displayName: "Indra Zulfi", bot: false },
       text: "hello",
+      attachments: [],
       mentionedBot: false,
       raw: update,
     });
+  });
+
+  it("normalizes the largest photo and accepts captionless media", () => {
+    const update = messageUpdate({
+      updateId: 14,
+      chatId: 5,
+      chatType: "private",
+      photo: [
+        { file_id: "small", width: 90, height: 90, file_size: 10 },
+        { file_id: "large", width: 800, height: 800, file_size: 100 },
+      ],
+    });
+
+    expect(normalizeTelegramUpdate(update, bot)?.attachments).toEqual([
+      { id: "large", type: "image", mediaType: "image/jpeg", size: 100 },
+    ]);
   });
 
   it("preserves topics and detects username mentions", () => {
@@ -86,7 +103,8 @@ type MessageUpdateOptions = Readonly<{
   updateId: number;
   chatId: number;
   chatType: "private" | "group" | "supergroup";
-  text: string;
+  text?: string;
+  photo?: NonNullable<TelegramUpdate["message"]>["photo"];
   threadId?: number;
   entities?: NonNullable<TelegramUpdate["message"]>["entities"];
   replyToBot?: boolean;
@@ -105,7 +123,8 @@ function messageUpdate(options: MessageUpdateOptions): TelegramUpdate {
         last_name: "Zulfi",
       },
       chat: { id: options.chatId, type: options.chatType },
-      text: options.text,
+      ...(options.text === undefined ? {} : { text: options.text }),
+      ...(options.photo === undefined ? {} : { photo: options.photo }),
       ...(options.entities === undefined ? {} : { entities: options.entities }),
       ...(options.replyToBot
         ? {

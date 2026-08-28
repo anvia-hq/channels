@@ -154,6 +154,13 @@ function gatewayMessageFromDiscord(
       ? { parentChannelId: message.channel.parentId }
       : {}),
     content: message.content,
+    attachments: message.attachments.map((attachment) => ({
+      id: attachment.id,
+      url: attachment.url,
+      filename: attachment.name,
+      ...(attachment.contentType === null ? {} : { mediaType: attachment.contentType }),
+      size: attachment.size,
+    })),
     author: gatewayUser(message.author),
     bot: gatewayUser(bot),
     ...(message.member === null ? {} : { memberDisplayName: message.member.displayName }),

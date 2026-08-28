@@ -1,4 +1,14 @@
+import type { ChannelAttachmentData } from "@anvia/channel";
+
 export type SlackChannelType = "channel" | "group" | "im" | "mpim" | "app_home";
+
+export type SlackFile = Readonly<{
+  id: string;
+  name: string;
+  mediaType: string;
+  size?: number;
+  privateDownloadUrl: string;
+}>;
 
 export type SlackIdentity = Readonly<{
   teamId: string;
@@ -17,6 +27,7 @@ export type SlackSocketMessage = Readonly<{
   senderDisplayName?: string;
   senderBot: boolean;
   text: string;
+  files: readonly SlackFile[];
   botUserId: string;
 }>;
 
@@ -37,4 +48,5 @@ export interface SlackTransport {
     text: string,
   ): Promise<SlackSentMessage>;
   edit(channelId: string, timestamp: string, text: string): Promise<void>;
+  loadAttachment(file: SlackFile, signal?: AbortSignal): Promise<ChannelAttachmentData>;
 }

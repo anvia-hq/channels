@@ -19,9 +19,37 @@ describe("normalizeSlackMessage", () => {
       conversation: { id: "D1", kind: "direct" },
       sender: { id: "U1", displayName: "Indra", bot: false },
       text: "hello",
+      attachments: [],
       mentionedBot: false,
       raw: message,
     });
+  });
+
+  it("normalizes image files and accepts file-only messages", () => {
+    expect(
+      normalizeSlackMessage(
+        slackMessage({
+          text: "",
+          files: [
+            {
+              id: "F1",
+              name: "image.png",
+              mediaType: "image/png",
+              size: 123,
+              privateDownloadUrl: "https://files.slack.com/image.png",
+            },
+          ],
+        }),
+      )?.attachments,
+    ).toEqual([
+      {
+        id: "F1",
+        type: "image",
+        mediaType: "image/png",
+        filename: "image.png",
+        size: 123,
+      },
+    ]);
   });
 
   it("normalizes channel mentions and multiparty threads", () => {

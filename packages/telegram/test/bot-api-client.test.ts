@@ -64,6 +64,117 @@ describe("Telegram Bot API client", () => {
     ]);
   });
 
+  it("runtime-validates media fields returned by getUpdates", async () => {
+    const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValue(
+      jsonResponse({
+        ok: true,
+        result: [
+          {
+            update_id: 10,
+            message: {
+              message_id: 7,
+              chat: { id: 5, type: "private" },
+              photo: [{ file_id: "photo-id", width: 10, height: 20, file_size: 30 }],
+              document: {
+                file_id: "document-id",
+                file_name: "brief.pdf",
+                mime_type: "application/pdf",
+                file_size: 40,
+              },
+            },
+          },
+        ],
+      }),
+    );
+    const api = createTelegramBotApiClient({ token: "123:test-token", fetch });
+
+    await expect(api.getUpdates({})).resolves.toMatchObject([
+      {
+        message: {
+          photo: [{ file_id: "photo-id", width: 10, height: 20, file_size: 30 }],
+          document: { file_id: "document-id", file_size: 40 },
+        },
+      },
+    ]);
+  });
+
+  it.each([
+    ["empty file ID", { file_id: "", width: 10, height: 20 }, "file_id was empty"],
+    ["negative width", { file_id: "photo-id", width: -1, height: 20 }, "positive integer"],
+    [
+      "negative file size",
+      { file_id: "photo-id", width: 10, height: 20, file_size: -1 },
+      "nonnegative integer",
+    ],
+  ])("rejects media with an %s", async (_case, photo, message) => {
+    const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValue(
+      jsonResponse({
+        ok: true,
+        result: [
+          {
+            update_id: 10,
+            message: {
+              message_id: 7,
+              chat: { id: 5, type: "private" },
+              photo: [photo],
+            },
+          },
+        ],
+      }),
+    );
+    const api = createTelegramBotApiClient({ token: "123:test-token", fetch });
+
+    await expect(api.getUpdates({})).rejects.toThrow(message);
+  });
+
+  it("downloads files without exposing the authenticated URL to callers", async () => {
+    const fetch = vi
+      .fn<typeof globalThis.fetch>()
+      .mockResolvedValueOnce(jsonResponse({ ok: true, result: { file_path: "photos/file_1.jpg" } }))
+      .mockResolvedValueOnce(new Response(new Uint8Array([1, 2, 3])));
+    const api = createTelegramBotApiClient({ token: "123:test-token", fetch });
+
+    await expect(api.downloadFile("photo-id")).resolves.toEqual({
+      type: "data",
+      data: "AQID",
+    });
+    expect(fetch.mock.calls[0]?.[0]).toBe("https://api.telegram.org/bot123:test-token/getFile");
+    expect(fetch.mock.calls[1]?.[0]).toBe(
+      "https://api.telegram.org/file/bot123:test-token/photos/file_1.jpg",
+    );
+  });
+
+  it("rejects a declared file size before downloading", async () => {
+    const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValue(
+      jsonResponse({
+        ok: true,
+        result: { file_path: "photos/file_1.jpg", file_size: 3 },
+      }),
+    );
+    const api = createTelegramBotApiClient({
+      token: "123:test-token",
+      fetch,
+      maximumAttachmentBytes: 2,
+    });
+
+    await expect(api.downloadFile("photo-id")).rejects.toThrow("must not exceed 2 bytes");
+    expect(fetch).toHaveBeenCalledOnce();
+  });
+
+  it("caps streamed downloads when content-length is unavailable", async () => {
+    const fetch = vi
+      .fn<typeof globalThis.fetch>()
+      .mockResolvedValueOnce(jsonResponse({ ok: true, result: { file_path: "file.bin" } }))
+      .mockResolvedValueOnce(new Response(new Uint8Array([1, 2, 3])));
+    const api = createTelegramBotApiClient({
+      token: "123:test-token",
+      fetch,
+      maximumAttachmentBytes: 2,
+    });
+
+    await expect(api.downloadFile("file-id")).rejects.toThrow("must not exceed 2 bytes");
+  });
+
   it("exposes Telegram error details without including the token", async () => {
     const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValue(
       jsonResponse(

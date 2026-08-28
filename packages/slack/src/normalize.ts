@@ -5,7 +5,9 @@ import type { SlackSocketMessage } from "./types.js";
 export function normalizeSlackMessage(
   message: SlackSocketMessage,
 ): ChannelMessageEvent<SlackSocketMessage> | undefined {
-  if (!validSlackMessage(message) || message.text.length === 0) return undefined;
+  if (!validSlackMessage(message) || (message.text.length === 0 && message.files.length === 0)) {
+    return undefined;
+  }
 
   return {
     type: "message",
@@ -25,6 +27,13 @@ export function normalizeSlackMessage(
       bot: message.senderBot,
     },
     text: message.text,
+    attachments: message.files.map((file) => ({
+      id: file.id,
+      type: attachmentType(file.mediaType),
+      mediaType: file.mediaType,
+      filename: file.name,
+      ...(file.size === undefined ? {} : { size: file.size }),
+    })),
     mentionedBot:
       message.type === "app_mention" || message.text.includes(`<@${message.botUserId}>`),
     raw: message,
@@ -50,6 +59,28 @@ function validSlackMessage(message: SlackSocketMessage): boolean {
     (message.senderDisplayName === undefined || typeof message.senderDisplayName === "string") &&
     typeof message.senderBot === "boolean" &&
     typeof message.text === "string" &&
+    Array.isArray(message.files) &&
+    message.files.every(validFile) &&
     isSlackId(message.botUserId)
   );
+}
+
+function validFile(file: SlackSocketMessage["files"][number]): boolean {
+  return (
+    typeof file.id === "string" &&
+    file.id.length > 0 &&
+    typeof file.name === "string" &&
+    file.name.length > 0 &&
+    typeof file.mediaType === "string" &&
+    file.mediaType.length > 0 &&
+    (file.size === undefined || (Number.isSafeInteger(file.size) && file.size >= 0)) &&
+    typeof file.privateDownloadUrl === "string"
+  );
+}
+
+function attachmentType(mediaType: string): "image" | "audio" | "video" | "file" {
+  if (mediaType.startsWith("image/")) return "image";
+  if (mediaType.startsWith("audio/")) return "audio";
+  if (mediaType.startsWith("video/")) return "video";
+  return "file";
 }

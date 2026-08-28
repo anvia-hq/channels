@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { discord } from "../src/index.js";
+import { discord, normalizeDiscordMessage } from "../src/index.js";
 import { discordMessage, fakeGateway } from "./helpers.js";
 
 describe("DiscordChannel", () => {
@@ -88,6 +88,31 @@ describe("DiscordChannel", () => {
     expect(fake.edit).toHaveBeenCalledWith("21", "77", "resolved");
   });
 
+  it("resolves normalized attachments to Discord CDN URLs", async () => {
+    const channel = discord({ gateway: fakeGateway().gateway });
+    const event = normalizeDiscordMessage(
+      discordMessage({
+        attachments: [
+          {
+            id: "60",
+            url: "https://cdn.discordapp.com/photo.png",
+            filename: "photo.png",
+            mediaType: "image/png",
+            size: 3,
+          },
+        ],
+      }),
+    );
+    if (event === undefined || event.attachments[0] === undefined) {
+      throw new Error("Expected a normalized attachment");
+    }
+
+    await expect(channel.loadAttachment(event, event.attachments[0])).resolves.toEqual({
+      type: "url",
+      url: "https://cdn.discordapp.com/photo.png",
+    });
+  });
+
   it("validates addresses, message limits, and lifecycle", async () => {
     const fake = fakeGateway();
     const channel = discord({ gateway: fake.gateway });
@@ -101,6 +126,9 @@ describe("DiscordChannel", () => {
     await expect(
       channel.send({ platform: "discord", conversationId: "20" }, { text: "x".repeat(2_001) }),
     ).rejects.toThrow("must not exceed 2000");
+    expect(
+      channel.splitMessage({ text: "x".repeat(2_001) }).map((part) => part.text.length),
+    ).toEqual([2_000, 1]);
 
     await channel.start(async () => undefined);
     await expect(channel.start(async () => undefined)).rejects.toThrow("already running");

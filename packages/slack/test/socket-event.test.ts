@@ -27,6 +27,7 @@ describe("parseSlackSocketEvent", () => {
       senderId: "U1",
       senderBot: false,
       text: "hello",
+      files: [],
       botUserId: "U2",
     });
   });
@@ -52,6 +53,40 @@ describe("parseSlackSocketEvent", () => {
       senderDisplayName: "Indra",
       senderBot: false,
     });
+  });
+
+  it("runtime-validates attached Slack files", () => {
+    expect(
+      parseSlackSocketEvent(
+        eventCallback({
+          type: "message",
+          subtype: "file_share",
+          channel: "D1",
+          channel_type: "im",
+          user: "U1",
+          text: "",
+          ts: "1700000000.000001",
+          files: [
+            {
+              id: "F1",
+              name: "photo.png",
+              mimetype: "image/png",
+              size: 123,
+              url_private_download: "https://files.slack.com/photo.png",
+            },
+          ],
+        }),
+        identity,
+      )?.files,
+    ).toEqual([
+      {
+        id: "F1",
+        name: "photo.png",
+        mediaType: "image/png",
+        size: 123,
+        privateDownloadUrl: "https://files.slack.com/photo.png",
+      },
+    ]);
   });
 
   it("allows human thread broadcasts and identifies bot senders", () => {
@@ -92,6 +127,24 @@ describe("parseSlackSocketEvent", () => {
       ),
     ).toBeUndefined();
     expect(parseSlackSocketEvent({ type: "event_callback" }, identity)).toBeUndefined();
+    expect(
+      parseSlackSocketEvent(
+        eventCallback({
+          type: "message",
+          channel: "D1",
+          user: "U1",
+          text: "file",
+          ts: "1700000000.000001",
+          files: [
+            {
+              id: "F1",
+              url_private_download: "https://attacker.example/file",
+            },
+          ],
+        }),
+        identity,
+      ),
+    ).toBeUndefined();
   });
 });
 

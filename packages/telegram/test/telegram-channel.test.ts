@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { telegram } from "../src/index.js";
+import { normalizeTelegramUpdate, telegram } from "../src/index.js";
 import type {
   TelegramBotApi,
   TelegramMessage,
@@ -148,6 +148,30 @@ describe("TelegramChannel", () => {
     });
   });
 
+  it("loads Telegram media through the authenticated Bot API", async () => {
+    const fake = fakeApi();
+    const channel = telegram({ api: fake.api });
+    const update: TelegramUpdate = {
+      update_id: 88,
+      message: {
+        message_id: 88,
+        from: { id: 7, is_bot: false, first_name: "Indra" },
+        chat: { id: 7, type: "private" },
+        photo: [{ file_id: "photo-id", width: 100, height: 100, file_size: 3 }],
+      },
+    };
+    const event = normalizeTelegramUpdate(update, bot);
+    if (event === undefined || event.attachments[0] === undefined) {
+      throw new Error("Expected a normalized attachment");
+    }
+
+    await expect(channel.loadAttachment(event, event.attachments[0])).resolves.toEqual({
+      type: "data",
+      data: "ZmFrZQ==",
+    });
+    expect(fake.downloadFile).toHaveBeenCalledWith("photo-id", undefined);
+  });
+
   it("validates addresses, text limits, polling options, and lifecycle", async () => {
     const fake = fakeApi();
     const channel = telegram({ api: fake.api });
@@ -158,6 +182,9 @@ describe("TelegramChannel", () => {
     await expect(
       channel.send({ platform: "telegram", conversationId: "1" }, { text: "x".repeat(4_097) }),
     ).rejects.toThrow("must not exceed 4096");
+    expect(
+      channel.splitMessage({ text: "x".repeat(4_097) }).map((part) => part.text.length),
+    ).toEqual([4_096, 1]);
     expect(() => telegram({ api: fake.api, polling: { limit: 101 } })).toThrow(
       "must be an integer between 1 and 100",
     );
@@ -176,6 +203,7 @@ type FakeApi = Readonly<{
   getUpdates: ReturnType<typeof vi.fn<TelegramBotApi["getUpdates"]>>;
   sendMessage: ReturnType<typeof vi.fn<TelegramBotApi["sendMessage"]>>;
   editMessageText: ReturnType<typeof vi.fn<TelegramBotApi["editMessageText"]>>;
+  downloadFile: ReturnType<typeof vi.fn<TelegramBotApi["downloadFile"]>>;
 }>;
 
 function fakeApi(): FakeApi {
@@ -187,12 +215,17 @@ function fakeApi(): FakeApi {
   const editMessageText = vi
     .fn<TelegramBotApi["editMessageText"]>()
     .mockResolvedValue(sentTelegramMessage());
+  const downloadFile = vi.fn<TelegramBotApi["downloadFile"]>().mockResolvedValue({
+    type: "data",
+    data: "ZmFrZQ==",
+  });
   return {
-    api: { getMe, getUpdates, sendMessage, editMessageText },
+    api: { getMe, getUpdates, sendMessage, editMessageText, downloadFile },
     getMe,
     getUpdates,
     sendMessage,
     editMessageText,
+    downloadFile,
   };
 }
 

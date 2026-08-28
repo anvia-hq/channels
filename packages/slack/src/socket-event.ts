@@ -1,5 +1,5 @@
 import { isSlackId, isSlackTimestamp } from "./identifiers.js";
-import type { SlackChannelType, SlackIdentity, SlackSocketMessage } from "./types.js";
+import type { SlackChannelType, SlackFile, SlackIdentity, SlackSocketMessage } from "./types.js";
 
 export function parseSlackSocketEvent(
   body: unknown,
@@ -16,6 +16,8 @@ export function parseSlackSocketEvent(
   if (!isSlackId(event.channel) || !isSlackTimestamp(event.ts) || typeof event.text !== "string") {
     return undefined;
   }
+  const files = slackFiles(event.files);
+  if (files === undefined || (event.text.length === 0 && files.length === 0)) return undefined;
 
   const senderId = isSlackId(event.user)
     ? event.user
@@ -42,13 +44,57 @@ export function parseSlackSocketEvent(
     senderBot:
       isSlackId(event.bot_id) || isSlackId(event.app_id) || senderId === identity.botUserId,
     text: event.text,
+    files,
     botUserId: identity.botUserId,
   };
 }
 
+function slackFiles(value: unknown): readonly SlackFile[] | undefined {
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) return undefined;
+  const files: SlackFile[] = [];
+  for (const candidate of value) {
+    if (
+      !isRecord(candidate) ||
+      !isSlackId(candidate.id) ||
+      (candidate.size !== undefined &&
+        (!Number.isSafeInteger(candidate.size) || Number(candidate.size) < 0))
+    ) {
+      return undefined;
+    }
+    const privateDownloadUrl = candidate.url_private_download ?? candidate.url_private;
+    if (!validPrivateDownloadUrl(privateDownloadUrl)) return undefined;
+    files.push({
+      id: candidate.id,
+      name: nonemptyString(candidate.name) ? candidate.name : candidate.id,
+      mediaType: nonemptyString(candidate.mimetype)
+        ? candidate.mimetype
+        : "application/octet-stream",
+      ...(candidate.size === undefined ? {} : { size: Number(candidate.size) }),
+      privateDownloadUrl,
+    });
+  }
+  return files;
+}
+
+function validPrivateDownloadUrl(value: unknown): value is string {
+  if (!nonemptyString(value)) return false;
+  try {
+    const url = new URL(value);
+    return (
+      url.protocol === "https:" &&
+      ["slack.com", "slack-files.com", "slack-gov.com"].some(
+        (domain) => url.hostname === domain || url.hostname.endsWith(`.${domain}`),
+      )
+    );
+  } catch {
+    return false;
+  }
+}
+
 function supportedSubtype(type: "message" | "app_mention", subtype: unknown): boolean {
   if (subtype === undefined) return true;
-  return type === "message" && subtype === "thread_broadcast";
+  return type === "message" && (subtype === "thread_broadcast" || subtype === "file_share");
 }
 
 function slackChannelType(value: unknown, channelId: string): SlackChannelType {

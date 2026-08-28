@@ -8,6 +8,7 @@ public HTTP endpoint. Webhook support is planned separately.
 ## Usage
 
 ```ts
+import { sendChannelMessage } from "@anvia/channel";
 import { telegram } from "@anvia/telegram";
 
 const channel = telegram({
@@ -18,7 +19,8 @@ const channel = telegram({
 });
 
 await channel.start(async (event) => {
-  await channel.send(
+  await sendChannelMessage(
+    channel,
     {
       platform: "telegram",
       accountId: event.accountId,
@@ -34,5 +36,11 @@ await channel.stop();
 ```
 
 Calling `start` verifies the token with `getMe`, starts polling in the background, and then
-resolves. Incoming text messages are delivered sequentially. Messages sent by bots and unsupported
-updates are acknowledged without invoking the handler.
+resolves. Incoming text, photos, documents, audio, voice messages, and video are delivered
+sequentially. Media bytes are downloaded through `getFile` only when an application or agent loads
+the attachment; the token-bearing Telegram download URL is never exposed to the model. Downloads
+are stream-capped to 20 MiB by default; set `maximumAttachmentBytes` on `telegram(...)` to choose a
+different application limit. Messages sent by bots and unsupported updates are acknowledged
+without invoking the handler.
+`sendChannelMessage` splits long text into ordered messages at Telegram's boundary; `channel.send`
+sends one atomic message and rejects oversized text.

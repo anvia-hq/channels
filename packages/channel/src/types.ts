@@ -19,6 +19,21 @@ export type ChannelSender = Readonly<{
   bot: boolean;
 }>;
 
+export type ChannelAttachmentType = "image" | "audio" | "video" | "file";
+
+export type ChannelAttachment = Readonly<{
+  id: string;
+  type: ChannelAttachmentType;
+  mediaType: string;
+  filename?: string;
+  size?: number;
+}>;
+
+export type ChannelAttachmentData =
+  | Readonly<{ type: "url"; url: string }>
+  /** Base64-encoded file bytes. */
+  | Readonly<{ type: "data"; data: string }>;
+
 export type ChannelMessageEvent<RawEvent = unknown> = Readonly<{
   type: "message";
   id: string;
@@ -27,6 +42,7 @@ export type ChannelMessageEvent<RawEvent = unknown> = Readonly<{
   conversation: ChannelConversation;
   sender: ChannelSender;
   text: string;
+  attachments: readonly ChannelAttachment[];
   mentionedBot: boolean;
   raw: RawEvent;
 }>;
@@ -49,6 +65,12 @@ export type ChannelEventHandler<RawEvent = unknown> = (
 export interface Channel<RawEvent = unknown> {
   readonly platform: string;
 
+  splitMessage(message: ChannelMessage): readonly ChannelMessage[];
+  loadAttachment?(
+    event: ChannelMessageEvent<RawEvent>,
+    attachment: ChannelAttachment,
+    signal?: AbortSignal,
+  ): Promise<ChannelAttachmentData>;
   start(handler: ChannelEventHandler<RawEvent>): Promise<void>;
   stop(): Promise<void>;
   send(address: ChannelAddress, message: ChannelMessage): Promise<SentChannelMessage>;

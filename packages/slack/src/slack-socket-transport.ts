@@ -1,5 +1,6 @@
 import { SocketModeClient } from "@slack/socket-mode";
 import { WebClient } from "@slack/web-api";
+import type { ChannelAttachmentData } from "@anvia/channel";
 import { isSlackId, isSlackTimestamp } from "./identifiers.js";
 import { parseSlackSocketEvent } from "./socket-event.js";
 import type {
@@ -10,6 +11,7 @@ import type {
 } from "./types.js";
 
 const MAX_REMEMBERED_MESSAGES = 1_000;
+const DEFAULT_MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024;
 
 export type SlackWebClient = Readonly<{
   authenticate(): Promise<unknown>;
@@ -19,11 +21,18 @@ export type SlackWebClient = Readonly<{
     text: string,
   ): Promise<unknown>;
   updateMessage(channelId: string, timestamp: string, text: string): Promise<unknown>;
+  downloadFile(
+    url: string,
+    maximumBytes: number,
+    signal?: AbortSignal,
+  ): Promise<ChannelAttachmentData>;
 }>;
 
 export type SlackSocketTransportOptions = Readonly<{
   appToken: string;
   botToken: string;
+  fetch?: typeof globalThis.fetch;
+  maximumAttachmentBytes?: number;
   onError?: (error: unknown) => void | Promise<void>;
 }>;
 
@@ -31,6 +40,7 @@ export class SlackSocketTransport implements SlackTransport {
   private readonly socket: SocketModeClient;
   private readonly web: SlackWebClient;
   private readonly onError: SlackSocketTransportOptions["onError"];
+  private readonly maximumAttachmentBytes: number;
   private readonly deliveries = new Set<Promise<void>>();
   private readonly rememberedMessages = new Set<string>();
   private slackEventListener: ((request: unknown) => void) | undefined;
@@ -41,8 +51,12 @@ export class SlackSocketTransport implements SlackTransport {
     validateToken(options.appToken, "Slack app-level token");
     validateToken(options.botToken, "Slack bot token");
     this.socket = new SocketModeClient({ appToken: options.appToken });
-    this.web = webClient ?? slackWebClient(options.botToken);
+    this.web = webClient ?? slackWebClient(options.botToken, options.fetch ?? globalThis.fetch);
     this.onError = options.onError;
+    this.maximumAttachmentBytes = options.maximumAttachmentBytes ?? DEFAULT_MAX_ATTACHMENT_BYTES;
+    if (!Number.isSafeInteger(this.maximumAttachmentBytes) || this.maximumAttachmentBytes <= 0) {
+      throw new TypeError("Slack maximum attachment size must be a positive integer");
+    }
   }
 
   async start(handler: SlackTransportHandler): Promise<void> {
@@ -124,6 +138,16 @@ export class SlackSocketTransport implements SlackTransport {
     await this.web.updateMessage(channelId, timestamp, sanitizeSlackText(text));
   }
 
+  async loadAttachment(
+    file: Parameters<SlackTransport["loadAttachment"]>[0],
+    signal?: AbortSignal,
+  ): Promise<ChannelAttachmentData> {
+    if (file.size !== undefined && file.size > this.maximumAttachmentBytes) {
+      throw new RangeError(`Slack attachment must not exceed ${this.maximumAttachmentBytes} bytes`);
+    }
+    return this.web.downloadFile(file.privateDownloadUrl, this.maximumAttachmentBytes, signal);
+  }
+
   private async authenticate(): Promise<SlackIdentity> {
     const response = await this.web.authenticate();
     if (!isRecord(response) || !isSlackId(response.team_id) || !isSlackId(response.user_id)) {
@@ -189,7 +213,10 @@ function socketRequest(value: unknown):
   };
 }
 
-function slackWebClient(botToken: string): SlackWebClient {
+function slackWebClient(
+  botToken: string,
+  fetchImplementation: typeof globalThis.fetch,
+): SlackWebClient {
   const client = new WebClient(botToken);
   return {
     authenticate: () => client.auth.test(),
@@ -209,7 +236,53 @@ function slackWebClient(botToken: string): SlackWebClient {
         text,
         link_names: false,
       }),
+    downloadFile: async (url, maximumBytes, signal) => {
+      try {
+        const response = await fetchImplementation(url, {
+          headers: { authorization: `Bearer ${botToken}` },
+          redirect: "error",
+          ...(signal === undefined ? {} : { signal }),
+        });
+        if (!response.ok) {
+          throw new Error(`Slack file download failed with HTTP ${response.status}`);
+        }
+        return { type: "data", data: await readResponseBase64(response, maximumBytes) };
+      } catch (error) {
+        if (error instanceof RangeError || signal?.aborted === true) throw error;
+        throw new Error("Slack file download failed");
+      }
+    },
   };
+}
+
+async function readResponseBase64(response: Response, maximumBytes: number): Promise<string> {
+  const contentLength = response.headers.get("content-length");
+  if (contentLength !== null && /^\d+$/.test(contentLength)) {
+    const declaredBytes = Number(contentLength);
+    if (declaredBytes > maximumBytes) {
+      throw new RangeError(`Slack attachment must not exceed ${maximumBytes} bytes`);
+    }
+  }
+
+  if (response.body === null) return "";
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let totalBytes = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    if (totalBytes + value.byteLength > maximumBytes) {
+      try {
+        await reader.cancel();
+      } catch {
+        // The size violation is the useful error even if stream cancellation fails.
+      }
+      throw new RangeError(`Slack attachment must not exceed ${maximumBytes} bytes`);
+    }
+    chunks.push(value);
+    totalBytes += value.byteLength;
+  }
+  return Buffer.concat(chunks, totalBytes).toString("base64");
 }
 
 function sentMessage(value: unknown, fallbackThread: string | undefined): SlackSentMessage {

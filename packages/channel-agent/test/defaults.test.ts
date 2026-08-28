@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   channelConversationKey,
+  channelConversationSession,
+  channelConversationUserSession,
   defaultChannelAgentSession,
   defaultShouldHandleChannelEvent,
 } from "../src/index.js";
@@ -51,6 +53,14 @@ describe("channel agent defaults", () => {
     });
   });
 
+  it("offers shared and sender-isolated conversation scopes", () => {
+    const event = messageEvent();
+
+    expect(channelConversationSession(event)).not.toHaveProperty("userId");
+    expect(channelConversationUserSession(event)).toMatchObject({ userId: "telegram:user-1" });
+    expect(defaultChannelAgentSession(event)).toEqual(channelConversationUserSession(event));
+  });
+
   it("escapes identifiers so separators cannot collide", () => {
     const first = messageEvent({
       platform: "custom:platform",
@@ -64,5 +74,17 @@ describe("channel agent defaults", () => {
 
     expect(channelConversationKey(first)).not.toBe(channelConversationKey(second));
     expect(channelConversationKey(first)).toContain("custom%3Aplatform");
+  });
+
+  it("distinguishes missing identifiers from identifier-like sentinel values", () => {
+    const { accountId: _accountId, ...missingAccount } = messageEvent();
+    const namedDefault = messageEvent({ accountId: "default" });
+    const rootConversation = messageEvent({ conversation: { id: "conversation", kind: "direct" } });
+    const rootThread = messageEvent({
+      conversation: { id: "conversation", kind: "direct", threadId: "root" },
+    });
+
+    expect(channelConversationKey(missingAccount)).not.toBe(channelConversationKey(namedDefault));
+    expect(channelConversationKey(rootConversation)).not.toBe(channelConversationKey(rootThread));
   });
 });

@@ -1,10 +1,14 @@
 import type {
   Channel,
   ChannelAddress,
+  ChannelAttachment,
+  ChannelAttachmentData,
   ChannelEventHandler,
   ChannelMessage,
+  ChannelMessageEvent,
   SentChannelMessage,
 } from "@anvia/channel";
+import { splitChannelText } from "@anvia/channel";
 import { DiscordJsGateway } from "./discord-js-gateway.js";
 import { normalizeDiscordMessage } from "./normalize.js";
 import { validateDiscordSnowflake } from "./snowflake.js";
@@ -57,6 +61,19 @@ export class DiscordChannel implements Channel<DiscordGatewayMessage> {
           : { messageContentIntent: options.messageContentIntent }),
         onError: (error) => this.reportError(error, { operation: "gateway" }),
       });
+  }
+
+  splitMessage(message: ChannelMessage): readonly ChannelMessage[] {
+    return splitChannelText(message.text, MAX_MESSAGE_LENGTH).map((text) => ({ text }));
+  }
+
+  async loadAttachment(
+    event: ChannelMessageEvent<DiscordGatewayMessage>,
+    attachment: ChannelAttachment,
+  ): Promise<ChannelAttachmentData> {
+    const source = event.raw.attachments.find((candidate) => candidate.id === attachment.id);
+    if (source === undefined) throw new Error(`Discord attachment ${attachment.id} is unavailable`);
+    return { type: "url", url: source.url };
   }
 
   async start(handler: ChannelEventHandler<DiscordGatewayMessage>): Promise<void> {

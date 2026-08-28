@@ -43,6 +43,7 @@ export function discordMessage(
     channelId: "20",
     ...(overrides.direct === true ? {} : { guildId: "30" }),
     content: "hello",
+    attachments: [],
     author: {
       id: "40",
       username: "indra",

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { slack } from "../src/index.js";
+import { normalizeSlackMessage, slack } from "../src/index.js";
 import { fakeTransport, slackMessage } from "./helpers.js";
 
 describe("SlackChannel", () => {
@@ -82,6 +82,33 @@ describe("SlackChannel", () => {
     expect(fake.edit).toHaveBeenCalledWith("C1", "1700000001.000002", "resolved");
   });
 
+  it("loads private attachments through the authenticated transport", async () => {
+    const fake = fakeTransport();
+    const channel = slack({ transport: fake.transport });
+    const event = normalizeSlackMessage(
+      slackMessage({
+        files: [
+          {
+            id: "F1",
+            name: "photo.png",
+            mediaType: "image/png",
+            size: 3,
+            privateDownloadUrl: "https://files.slack.com/photo.png",
+          },
+        ],
+      }),
+    );
+    if (event === undefined || event.attachments[0] === undefined) {
+      throw new Error("Expected a normalized attachment");
+    }
+
+    await expect(channel.loadAttachment(event, event.attachments[0])).resolves.toEqual({
+      type: "data",
+      data: "ZmFrZQ==",
+    });
+    expect(fake.loadAttachment).toHaveBeenCalledWith(event.raw.files[0], undefined);
+  });
+
   it("validates addresses, message limits, and lifecycle", async () => {
     const fake = fakeTransport();
     const channel = slack({ transport: fake.transport });
@@ -95,6 +122,9 @@ describe("SlackChannel", () => {
     await expect(
       channel.send({ platform: "slack", conversationId: "C1" }, { text: "x".repeat(4_001) }),
     ).rejects.toThrow("must not exceed 4000");
+    expect(
+      channel.splitMessage({ text: "x".repeat(4_001) }).map((part) => part.text.length),
+    ).toEqual([4_000, 1]);
 
     await channel.start(async () => undefined);
     await expect(channel.start(async () => undefined)).rejects.toThrow("already running");

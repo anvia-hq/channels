@@ -1,8 +1,20 @@
 import type { Agent, AgentOutcome } from "@anvia/core";
 import { describe, expect, expectTypeOf, it, vi } from "vitest";
-import { createChannelAgent, serveChannelAgent } from "../src/index.js";
+import {
+  MemoryChannelAgentInteractionStore,
+  channelInteractionKey,
+  createChannelAgent,
+  serveChannelAgent,
+} from "../src/index.js";
 import type { ChannelAgentExecutor, ChannelAgentRunInput } from "../src/index.js";
-import { FakeChannel, agentResponse, deferred, messageEvent, textStream } from "./helpers.js";
+import {
+  FakeChannel,
+  agentApproval,
+  agentResponse,
+  deferred,
+  messageEvent,
+  textStream,
+} from "./helpers.js";
 
 describe("ChannelAgentService", () => {
   it("runs an agent with the default prompt and memory scope", async () => {
@@ -29,6 +41,214 @@ describe("ChannelAgentService", () => {
     expect(channel.edits.map((item) => item.message.text)).toEqual(["hello back"]);
 
     await service.stop();
+  });
+
+  it("loads attachments into a multimodal Anvia prompt by default", async () => {
+    const channel = new FakeChannel();
+    channel.attachmentData.set("image-1", {
+      type: "url",
+      url: "https://cdn.example.test/image.png",
+    });
+    channel.attachmentData.set("file-1", { type: "data", data: "cGRm" });
+    const loadAttachment = vi.spyOn(channel, "loadAttachment");
+    const generate = vi
+      .fn<ChannelAgentExecutor["generate"]>()
+      .mockResolvedValue(agentResponse("I can see both attachments."));
+    const service = await serveChannelAgent({
+      channel,
+      agent: fakeAgent({ generate, streaming: false }),
+      streaming: { placeholder: false },
+    });
+    const event = messageEvent({
+      text: "Describe these",
+      attachments: [
+        { id: "image-1", type: "image", mediaType: "image/png", size: 123 },
+        {
+          id: "file-1",
+          type: "file",
+          mediaType: "application/pdf",
+          filename: "brief.pdf",
+        },
+      ],
+    });
+
+    await channel.emit(event);
+
+    expect(generate.mock.calls[0]?.[0].prompt).toEqual({
+      role: "user",
+      content: [
+        { type: "text", text: "Describe these" },
+        {
+          type: "image",
+          image: { type: "url", url: "https://cdn.example.test/image.png" },
+          mediaType: "image/png",
+        },
+        {
+          type: "file",
+          data: { type: "data", data: "cGRm" },
+          mediaType: "application/pdf",
+          filename: "brief.pdf",
+        },
+      ],
+    });
+    expect(loadAttachment).toHaveBeenCalledTimes(2);
+    expect(loadAttachment.mock.calls.every((call) => call[2] instanceof AbortSignal)).toBe(true);
+    await service.stop();
+  });
+
+  it("rejects attachment prompts when multimodal input is disabled", async () => {
+    const channel = new FakeChannel();
+    const generate = vi
+      .fn<ChannelAgentExecutor["generate"]>()
+      .mockResolvedValue(agentResponse("unused"));
+    const onError = vi.fn();
+    const service = await serveChannelAgent({
+      channel,
+      agent: fakeAgent({ generate, streaming: false }),
+      multimodal: false,
+      errorMessage: false,
+      onError,
+    });
+
+    await channel.emit(
+      messageEvent({
+        attachments: [{ id: "file-1", type: "file", mediaType: "text/plain", size: 1 }],
+      }),
+    );
+
+    expect(generate).not.toHaveBeenCalled();
+    expect(onError).toHaveBeenCalledWith(expect.any(TypeError), {
+      stage: "prepare",
+      event: expect.objectContaining({ id: "event-1" }),
+    });
+    await service.stop();
+  });
+
+  it("omits the default session for an Anvia executor without memory", async () => {
+    const channel = new FakeChannel();
+    const generate = vi
+      .fn<ChannelAgentExecutor["generate"]>()
+      .mockResolvedValue(agentResponse("hello back"));
+    const agent = { ...fakeAgent({ generate, streaming: false }), memory: undefined };
+    const service = await serveChannelAgent({
+      channel,
+      agent,
+      streaming: { placeholder: false },
+    });
+
+    await channel.emit(messageEvent());
+
+    expect(generate.mock.calls[0]?.[0]).not.toHaveProperty("session");
+    expect(channel.sent.map((item) => item.message.text)).toEqual(["hello back"]);
+    await service.stop();
+  });
+
+  it("delivers long responses as platform-prepared message parts", async () => {
+    const channel = new FakeChannel(10);
+    const generate = vi
+      .fn<ChannelAgentExecutor["generate"]>()
+      .mockResolvedValue(agentResponse("abcdefghijklmnopqrstu"));
+    const service = await serveChannelAgent({
+      channel,
+      agent: fakeAgent({ generate, streaming: false }),
+    });
+
+    await channel.emit(messageEvent());
+
+    expect(channel.edits.map((item) => item.message.text)).toEqual(["abcdefghij"]);
+    expect(channel.sent.map((item) => item.message.text)).toEqual(["Thinking…", "klmnopqrst", "u"]);
+    await service.stop();
+  });
+
+  it("renders channel interactions and resumes them from the sender's next reply", async () => {
+    const channel = new FakeChannel();
+    const generate = vi.fn<ChannelAgentExecutor["generate"]>().mockResolvedValue(agentApproval());
+    const resume = vi
+      .fn<NonNullable<ChannelAgentExecutor["resume"]>>()
+      .mockResolvedValue(agentResponse("Email sent."));
+    const agent = { ...fakeAgent({ generate, streaming: false }), resume };
+    const service = await serveChannelAgent({
+      channel,
+      agent,
+      streaming: { placeholder: false },
+    });
+
+    await channel.emit(messageEvent());
+    await channel.emit(messageEvent({ id: "event-2", text: "maybe" }));
+    await channel.emit(messageEvent({ id: "event-3", text: "approve" }));
+
+    expect(channel.sent[0]?.message.text).toContain('Approve tool "send_email"?');
+    expect(channel.sent[0]?.message.text).toContain('Reply "approve" or "deny".');
+    expect(channel.sent[1]?.message.text).toContain("couldn't understand");
+    expect(resume).toHaveBeenCalledWith(
+      expect.objectContaining({ sourceRunId: "run-1" }),
+      { type: "tool-approval", approved: true },
+      { abortSignal: expect.any(AbortSignal) },
+    );
+    expect(channel.sent.at(-1)?.message.text).toBe("Email sent.");
+    await service.stop();
+  });
+
+  it("does not treat an unrelated unmentioned group message as interaction approval", async () => {
+    const channel = new FakeChannel();
+    const generate = vi.fn<ChannelAgentExecutor["generate"]>().mockResolvedValue(agentApproval());
+    const resume = vi
+      .fn<NonNullable<ChannelAgentExecutor["resume"]>>()
+      .mockResolvedValue(agentResponse("Email sent."));
+    const service = await serveChannelAgent({
+      channel,
+      agent: { ...fakeAgent({ generate, streaming: false }), resume },
+      streaming: { placeholder: false },
+    });
+    const group = { id: "group", kind: "group" as const };
+
+    await channel.emit(messageEvent({ conversation: group, mentionedBot: true }));
+    await channel.emit(
+      messageEvent({ id: "event-2", conversation: group, text: "yes", mentionedBot: false }),
+    );
+
+    expect(resume).not.toHaveBeenCalled();
+
+    await channel.emit(
+      messageEvent({ id: "event-3", conversation: group, text: "yes", mentionedBot: true }),
+    );
+
+    expect(resume).toHaveBeenCalledOnce();
+    expect(channel.sent.at(-1)?.message.text).toBe("Email sent.");
+    await service.stop();
+  });
+
+  it("persists a resumed follow-up interaction when shutdown races with resume", async () => {
+    const channel = new FakeChannel();
+    const store = new MemoryChannelAgentInteractionStore();
+    const resumed = deferred<AgentOutcome<string>>();
+    const resume = vi
+      .fn<NonNullable<ChannelAgentExecutor["resume"]>>()
+      .mockReturnValue(resumed.promise);
+    const service = await serveChannelAgent({
+      channel,
+      agent: {
+        ...fakeAgent({
+          generate: vi
+            .fn<ChannelAgentExecutor["generate"]>()
+            .mockResolvedValue(agentApproval("run-1")),
+          streaming: false,
+        }),
+        resume,
+      },
+      interactions: { store },
+      streaming: { placeholder: false },
+    });
+    const event = messageEvent();
+    await channel.emit(event);
+
+    const reply = channel.emit(messageEvent({ id: "event-2", text: "approve" }));
+    await vi.waitFor(() => expect(resume).toHaveBeenCalledOnce());
+    const stopping = service.stop();
+    resumed.resolve(agentApproval("run-2"));
+    await Promise.all([reply, stopping]);
+
+    expect(store.get(channelInteractionKey(event))?.continuation.sourceRunId).toBe("run-2");
   });
 
   it("filters unmentioned group messages by default", async () => {
@@ -76,6 +296,26 @@ describe("ChannelAgentService", () => {
     expect(channel.sent.map((item) => item.message.text)).toEqual(["Thinking…"]);
     expect(channel.edits.map((item) => item.message.text)).toEqual(["hel", "hello"]);
 
+    await service.stop();
+  });
+
+  it("does not split the growing stream while progressive edits are throttled", async () => {
+    const channel = new FakeChannel();
+    const finalText = "x".repeat(100);
+    const stream = vi.fn<ChannelAgentExecutor["stream"]>().mockReturnValue({
+      textStream: textStream(...Array.from({ length: 100 }, () => "x")),
+      result: Promise.resolve(agentResponse(finalText)),
+    });
+    const service = await serveChannelAgent({
+      channel,
+      agent: fakeAgent({ stream, streaming: true }),
+      streaming: { editIntervalMs: 10_000 },
+    });
+
+    await channel.emit(messageEvent());
+
+    expect(channel.splitCount).toBe(2);
+    expect(channel.edits.map((item) => item.message.text)).toEqual([finalText]);
     await service.stop();
   });
 

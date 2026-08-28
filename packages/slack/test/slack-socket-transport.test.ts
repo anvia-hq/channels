@@ -51,6 +51,69 @@ describe("SlackSocketTransport Web API delivery", () => {
     );
   });
 
+  it("downloads private files with bot authentication and returns base64", async () => {
+    const fetch = vi
+      .fn<typeof globalThis.fetch>()
+      .mockResolvedValue(new Response(new Uint8Array([1, 2, 3])));
+    const transport = new SlackSocketTransport({ ...tokens(), fetch });
+
+    await expect(
+      transport.loadAttachment({
+        id: "F1",
+        name: "photo.png",
+        mediaType: "image/png",
+        size: 3,
+        privateDownloadUrl: "https://files.slack.com/photo.png",
+      }),
+    ).resolves.toEqual({ type: "data", data: "AQID" });
+    expect(fetch).toHaveBeenCalledWith(
+      "https://files.slack.com/photo.png",
+      expect.objectContaining({
+        headers: { authorization: "Bearer xoxb-test" },
+        redirect: "error",
+      }),
+    );
+  });
+
+  it("rejects attachments above the configured application limit", async () => {
+    const fake = fakeWebClient();
+    const transport = new SlackSocketTransport(
+      { ...tokens(), maximumAttachmentBytes: 2 },
+      fake.web,
+    );
+
+    await expect(
+      transport.loadAttachment({
+        id: "F1",
+        name: "photo.png",
+        mediaType: "image/png",
+        size: 3,
+        privateDownloadUrl: "https://files.slack.com/photo.png",
+      }),
+    ).rejects.toThrow("must not exceed 2 bytes");
+    expect(fake.downloadFile).not.toHaveBeenCalled();
+  });
+
+  it("caps streamed downloads when content-length is unavailable", async () => {
+    const fetch = vi
+      .fn<typeof globalThis.fetch>()
+      .mockResolvedValue(new Response(new Uint8Array([1, 2, 3])));
+    const transport = new SlackSocketTransport({
+      ...tokens(),
+      fetch,
+      maximumAttachmentBytes: 2,
+    });
+
+    await expect(
+      transport.loadAttachment({
+        id: "F1",
+        name: "file.bin",
+        mediaType: "application/octet-stream",
+        privateDownloadUrl: "https://files.slack.com/file.bin",
+      }),
+    ).rejects.toThrow("must not exceed 2 bytes");
+  });
+
   it("acknowledges envelopes before handling and suppresses duplicate deliveries", async () => {
     const transport = new SlackSocketTransport(tokens(), fakeWebClient().web);
     const receive = transport as unknown as {
@@ -99,6 +162,7 @@ type FakeWebClient = Readonly<{
   authenticate: ReturnType<typeof vi.fn<SlackWebClient["authenticate"]>>;
   postMessage: ReturnType<typeof vi.fn<SlackWebClient["postMessage"]>>;
   updateMessage: ReturnType<typeof vi.fn<SlackWebClient["updateMessage"]>>;
+  downloadFile: ReturnType<typeof vi.fn<SlackWebClient["downloadFile"]>>;
 }>;
 
 function fakeWebClient(): FakeWebClient {
@@ -107,11 +171,16 @@ function fakeWebClient(): FakeWebClient {
     .mockResolvedValue({ ok: true, team_id: "T1", user_id: "U2" });
   const postMessage = vi.fn<SlackWebClient["postMessage"]>();
   const updateMessage = vi.fn<SlackWebClient["updateMessage"]>().mockResolvedValue({ ok: true });
+  const downloadFile = vi.fn<SlackWebClient["downloadFile"]>().mockResolvedValue({
+    type: "data",
+    data: "ZmFrZQ==",
+  });
   return {
-    web: { authenticate, postMessage, updateMessage },
+    web: { authenticate, postMessage, updateMessage, downloadFile },
     authenticate,
     postMessage,
     updateMessage,
+    downloadFile,
   };
 }
 

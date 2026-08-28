@@ -5,7 +5,35 @@ export function defaultShouldHandleChannelEvent(event: ChannelMessageEvent): boo
   return !event.sender.bot && (event.conversation.kind === "direct" || event.mentionedBot);
 }
 
+export function channelConversationSession(event: ChannelMessageEvent): MemoryScope {
+  return {
+    sessionId: channelConversationKey(event),
+    metadata: channelSessionMetadata(event),
+  };
+}
+
+export function channelConversationUserSession(event: ChannelMessageEvent): MemoryScope {
+  return {
+    ...channelConversationSession(event),
+    userId: `${encode(event.platform)}:${encode(event.sender.id)}`,
+  };
+}
+
 export function defaultChannelAgentSession(event: ChannelMessageEvent): MemoryScope {
+  return channelConversationUserSession(event);
+}
+
+export function channelConversationKey(event: ChannelMessageEvent): string {
+  return [
+    "channel",
+    encode(event.platform),
+    optionalIdentifier(event.accountId, "default"),
+    encode(event.conversation.id),
+    optionalIdentifier(event.conversation.threadId, "root"),
+  ].join(":");
+}
+
+function channelSessionMetadata(event: ChannelMessageEvent): JsonObject {
   const metadata: JsonObject = {
     platform: event.platform,
     conversationId: event.conversation.id,
@@ -16,25 +44,15 @@ export function defaultChannelAgentSession(event: ChannelMessageEvent): MemorySc
     metadata.threadId = event.conversation.threadId;
   }
 
-  return {
-    sessionId: channelConversationKey(event),
-    userId: `${encode(event.platform)}:${encode(event.sender.id)}`,
-    metadata,
-  };
-}
-
-export function channelConversationKey(event: ChannelMessageEvent): string {
-  return [
-    "channel",
-    event.platform,
-    event.accountId ?? "default",
-    event.conversation.id,
-    event.conversation.threadId ?? "root",
-  ]
-    .map(encode)
-    .join(":");
+  return metadata;
 }
 
 function encode(value: string): string {
   return encodeURIComponent(value);
+}
+
+function optionalIdentifier(value: string | undefined, missing: string): string {
+  if (value === undefined) return missing;
+  const encoded = encode(value);
+  return encoded === missing || encoded.startsWith("~") ? `~${encoded}` : encoded;
 }

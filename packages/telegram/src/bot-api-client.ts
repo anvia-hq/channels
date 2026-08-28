@@ -1,18 +1,22 @@
 import type {
   TelegramBotApi,
   TelegramChat,
+  TelegramMediaFile,
   TelegramMessage,
   TelegramMessageEntity,
+  TelegramPhotoSize,
   TelegramUpdate,
   TelegramUser,
 } from "./types.js";
 
 const DEFAULT_BASE_URL = "https://api.telegram.org";
+const DEFAULT_MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024;
 
 export type TelegramBotApiClientOptions = Readonly<{
   token: string;
   baseUrl?: string;
   fetch?: typeof globalThis.fetch;
+  maximumAttachmentBytes?: number;
 }>;
 
 export class TelegramApiError extends Error {
@@ -41,6 +45,11 @@ export function createTelegramBotApiClient(options: TelegramBotApiClientOptions)
   const token = validateToken(options.token);
   const baseUrl = normalizeBaseUrl(options.baseUrl ?? DEFAULT_BASE_URL);
   const fetchImplementation = options.fetch ?? globalThis.fetch;
+  const maximumAttachmentBytes = options.maximumAttachmentBytes ?? DEFAULT_MAX_ATTACHMENT_BYTES;
+
+  if (!Number.isSafeInteger(maximumAttachmentBytes) || maximumAttachmentBytes <= 0) {
+    throw new TypeError("Telegram maximum attachment size must be a positive integer");
+  }
 
   if (typeof fetchImplementation !== "function") {
     throw new TypeError("A Fetch API implementation is required");
@@ -114,7 +123,77 @@ export function createTelegramBotApiClient(options: TelegramBotApiClientOptions)
       if (result === true) return true;
       return telegramMessage(result, "editMessageText result");
     },
+
+    async downloadFile(fileId, signal) {
+      if (typeof fileId !== "string" || fileId.length === 0) {
+        throw new TypeError("Telegram file ID must not be empty");
+      }
+      const file = object(await call("getFile", { file_id: fileId }, signal), "getFile result");
+      const filePath = nonemptyString(file.file_path, "getFile result.file_path");
+      if (!validFilePath(filePath)) throw new TypeError("Telegram file path is invalid");
+      const fileSize = optionalNonnegativeInteger(file.file_size, "getFile result.file_size");
+      if (fileSize !== undefined && fileSize > maximumAttachmentBytes) {
+        throw new RangeError(`Telegram attachment must not exceed ${maximumAttachmentBytes} bytes`);
+      }
+
+      let response: Response;
+      try {
+        response = await fetchImplementation(
+          `${baseUrl}/file/bot${token}/${filePath}`,
+          signal === undefined ? undefined : { signal },
+        );
+      } catch (error) {
+        if (signal?.aborted === true) throw error;
+        throw new TelegramApiError("downloadFile", "request failed");
+      }
+      if (!response.ok) {
+        throw new TelegramApiError("downloadFile", `received HTTP ${response.status}`);
+      }
+      try {
+        return {
+          type: "data",
+          data: await readResponseBase64(response, maximumAttachmentBytes),
+        };
+      } catch (error) {
+        if (error instanceof RangeError || signal?.aborted === true) throw error;
+        throw new TelegramApiError("downloadFile", "response body could not be read");
+      }
+    },
   };
+}
+
+async function readResponseBase64(response: Response, maximumBytes: number): Promise<string> {
+  const contentLength = response.headers.get("content-length");
+  if (contentLength !== null && /^\d+$/.test(contentLength)) {
+    const declaredBytes = Number(contentLength);
+    if (declaredBytes > maximumBytes) {
+      throw new RangeError(`Telegram attachment must not exceed ${maximumBytes} bytes`);
+    }
+  }
+
+  if (response.body === null) return "";
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let totalBytes = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    if (totalBytes + value.byteLength > maximumBytes) {
+      try {
+        await reader.cancel();
+      } catch {
+        // The size violation is the useful error even if stream cancellation fails.
+      }
+      throw new RangeError(`Telegram attachment must not exceed ${maximumBytes} bytes`);
+    }
+    chunks.push(value);
+    totalBytes += value.byteLength;
+  }
+  return Buffer.concat(chunks, totalBytes).toString("base64");
+}
+
+function validFilePath(value: string): boolean {
+  return value.length > 0 && !value.includes("..") && /^[A-Za-z0-9_./-]+$/.test(value);
 }
 
 function validateToken(value: string): string {
@@ -166,6 +245,13 @@ function telegramMessage(value: unknown, label: string): TelegramMessage {
     from?: TelegramUser;
     text?: string;
     entities?: readonly TelegramMessageEntity[];
+    caption?: string;
+    caption_entities?: readonly TelegramMessageEntity[];
+    photo?: readonly TelegramPhotoSize[];
+    document?: TelegramMediaFile;
+    audio?: TelegramMediaFile;
+    video?: TelegramMediaFile;
+    voice?: TelegramMediaFile;
     reply_to_message?: TelegramMessage;
   } = {
     message_id: integer(raw.message_id, `${label}.message_id`),
@@ -179,10 +265,49 @@ function telegramMessage(value: unknown, label: string): TelegramMessage {
   if (text !== undefined) result.text = text;
   if (raw.entities !== undefined)
     result.entities = telegramEntities(raw.entities, `${label}.entities`);
+  const caption = optionalString(raw.caption);
+  if (caption !== undefined) result.caption = caption;
+  if (raw.caption_entities !== undefined) {
+    result.caption_entities = telegramEntities(raw.caption_entities, `${label}.caption_entities`);
+  }
+  if (raw.photo !== undefined) result.photo = telegramPhotos(raw.photo, `${label}.photo`);
+  for (const key of ["document", "audio", "video", "voice"] as const) {
+    if (raw[key] !== undefined) result[key] = telegramMediaFile(raw[key], `${label}.${key}`);
+  }
   if (raw.reply_to_message !== undefined) {
     result.reply_to_message = telegramMessage(raw.reply_to_message, `${label}.reply_to_message`);
   }
   return result;
+}
+
+function telegramPhotos(value: unknown, label: string): readonly TelegramPhotoSize[] {
+  if (!Array.isArray(value) || value.length === 0) {
+    throw new TypeError(`${label} was not a non-empty array`);
+  }
+  return value.map((item, index) => {
+    const raw = object(item, `${label}[${index}]`);
+    const itemLabel = `${label}[${index}]`;
+    const fileSize = optionalNonnegativeInteger(raw.file_size, `${itemLabel}.file_size`);
+    return {
+      file_id: nonemptyString(raw.file_id, `${itemLabel}.file_id`),
+      width: positiveInteger(raw.width, `${itemLabel}.width`),
+      height: positiveInteger(raw.height, `${itemLabel}.height`),
+      ...(fileSize === undefined ? {} : { file_size: fileSize }),
+    };
+  });
+}
+
+function telegramMediaFile(value: unknown, label: string): TelegramMediaFile {
+  const raw = object(value, label);
+  const fileName = optionalString(raw.file_name);
+  const mediaType = optionalString(raw.mime_type);
+  const fileSize = optionalNonnegativeInteger(raw.file_size, `${label}.file_size`);
+  return {
+    file_id: nonemptyString(raw.file_id, `${label}.file_id`),
+    ...(fileName === undefined ? {} : { file_name: fileName }),
+    ...(mediaType === undefined ? {} : { mime_type: mediaType }),
+    ...(fileSize === undefined ? {} : { file_size: fileSize }),
+  };
 }
 
 function telegramUser(value: unknown, label: string): TelegramUser {
@@ -265,6 +390,12 @@ function string(value: unknown, label: string): string {
   return value;
 }
 
+function nonemptyString(value: unknown, label: string): string {
+  const result = string(value, label);
+  if (result.length === 0) throw new TypeError(`${label} was empty`);
+  return result;
+}
+
 function optionalString(value: unknown): string | undefined {
   return value === undefined ? undefined : string(value, "Telegram field");
 }
@@ -277,6 +408,22 @@ function boolean(value: unknown, label: string): boolean {
 function integer(value: unknown, label: string): number {
   if (!Number.isSafeInteger(value)) throw new TypeError(`${label} was not a safe integer`);
   return value as number;
+}
+
+function positiveInteger(value: unknown, label: string): number {
+  const result = integer(value, label);
+  if (result <= 0) throw new TypeError(`${label} was not a positive integer`);
+  return result;
+}
+
+function nonnegativeInteger(value: unknown, label: string): number {
+  const result = integer(value, label);
+  if (result < 0) throw new TypeError(`${label} was not a nonnegative integer`);
+  return result;
+}
+
+function optionalNonnegativeInteger(value: unknown, label: string): number | undefined {
+  return value === undefined ? undefined : nonnegativeInteger(value, label);
 }
 
 function optionalInteger(value: unknown): number | undefined {

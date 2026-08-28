@@ -1,10 +1,14 @@
 import type {
   Channel,
   ChannelAddress,
+  ChannelAttachment,
+  ChannelAttachmentData,
   ChannelEventHandler,
   ChannelMessage,
+  ChannelMessageEvent,
   SentChannelMessage,
 } from "@anvia/channel";
+import { splitChannelText } from "@anvia/channel";
 import { TelegramApiError, createTelegramBotApiClient } from "./bot-api-client.js";
 import { normalizeTelegramUpdate } from "./normalize.js";
 import type { TelegramBotApi, TelegramUpdate, TelegramUser } from "./types.js";
@@ -38,12 +42,14 @@ export type TelegramChannelOptions = TelegramChannelCommonOptions &
         api?: never;
         baseUrl?: string;
         fetch?: typeof globalThis.fetch;
+        maximumAttachmentBytes?: number;
       }>
     | Readonly<{
         api: TelegramBotApi;
         token?: never;
         baseUrl?: never;
         fetch?: never;
+        maximumAttachmentBytes?: never;
       }>
   );
 
@@ -67,9 +73,24 @@ export class TelegramChannel implements Channel<TelegramUpdate> {
         token: options.token,
         ...(options.baseUrl === undefined ? {} : { baseUrl: options.baseUrl }),
         ...(options.fetch === undefined ? {} : { fetch: options.fetch }),
+        ...(options.maximumAttachmentBytes === undefined
+          ? {}
+          : { maximumAttachmentBytes: options.maximumAttachmentBytes }),
       });
     this.polling = resolvePollingOptions(options.polling);
     this.onError = options.onError;
+  }
+
+  splitMessage(message: ChannelMessage): readonly ChannelMessage[] {
+    return splitChannelText(message.text, MAX_MESSAGE_LENGTH).map((text) => ({ text }));
+  }
+
+  loadAttachment(
+    _event: ChannelMessageEvent<TelegramUpdate>,
+    attachment: ChannelAttachment,
+    signal?: AbortSignal,
+  ): Promise<ChannelAttachmentData> {
+    return this.api.downloadFile(attachment.id, signal);
   }
 
   async start(handler: ChannelEventHandler<TelegramUpdate>): Promise<void> {

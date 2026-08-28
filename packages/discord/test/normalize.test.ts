@@ -17,8 +17,52 @@ describe("normalizeDiscordMessage", () => {
       conversation: { id: "20", kind: "direct" },
       sender: { id: "40", displayName: "Indra", bot: false },
       text: "hello",
+      attachments: [],
       mentionedBot: false,
       raw: message,
+    });
+  });
+
+  it("normalizes image attachments and accepts media-only messages", () => {
+    const message = discordMessage({
+      content: "",
+      attachments: [
+        {
+          id: "60",
+          url: "https://cdn.discordapp.com/image.png",
+          filename: "image.png",
+          mediaType: "image/png",
+          size: 123,
+        },
+      ],
+    });
+
+    expect(normalizeDiscordMessage(message)?.attachments).toEqual([
+      {
+        id: "60",
+        type: "image",
+        mediaType: "image/png",
+        filename: "image.png",
+        size: 123,
+      },
+    ]);
+  });
+
+  it("infers attachment type from a filename when Discord omits the media type", () => {
+    const message = discordMessage({
+      attachments: [
+        {
+          id: "60",
+          url: "https://cdn.discordapp.com/image.png",
+          filename: "image.png",
+          size: 123,
+        },
+      ],
+    });
+
+    expect(normalizeDiscordMessage(message)?.attachments[0]).toMatchObject({
+      type: "image",
+      mediaType: "image/png",
     });
   });
 

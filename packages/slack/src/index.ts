@@ -13,6 +13,7 @@ export type { SlackSocketTransportOptions, SlackWebClient } from "./slack-socket
 export type {
   SlackChannelType,
   SlackIdentity,
+  SlackFile,
   SlackSentMessage,
   SlackSocketMessage,
   SlackTransport,

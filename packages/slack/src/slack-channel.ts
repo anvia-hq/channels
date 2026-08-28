@@ -1,10 +1,14 @@
 import type {
   Channel,
   ChannelAddress,
+  ChannelAttachment,
+  ChannelAttachmentData,
   ChannelEventHandler,
   ChannelMessage,
+  ChannelMessageEvent,
   SentChannelMessage,
 } from "@anvia/channel";
+import { splitChannelText } from "@anvia/channel";
 import { validateSlackId, validateSlackTimestamp } from "./identifiers.js";
 import { normalizeSlackMessage } from "./normalize.js";
 import { SlackSocketTransport } from "./slack-socket-transport.js";
@@ -26,12 +30,16 @@ export type SlackChannelOptions = SlackChannelCommonOptions &
     | Readonly<{
         appToken: string;
         botToken: string;
+        fetch?: typeof globalThis.fetch;
+        maximumAttachmentBytes?: number;
         transport?: never;
       }>
     | Readonly<{
         transport: SlackTransport;
         appToken?: never;
         botToken?: never;
+        fetch?: never;
+        maximumAttachmentBytes?: never;
       }>
   );
 
@@ -53,8 +61,26 @@ export class SlackChannel implements Channel<SlackSocketMessage> {
       new SlackSocketTransport({
         appToken: options.appToken,
         botToken: options.botToken,
+        ...(options.fetch === undefined ? {} : { fetch: options.fetch }),
+        ...(options.maximumAttachmentBytes === undefined
+          ? {}
+          : { maximumAttachmentBytes: options.maximumAttachmentBytes }),
         onError: (error) => this.reportError(error, { operation: "socket" }),
       });
+  }
+
+  splitMessage(message: ChannelMessage): readonly ChannelMessage[] {
+    return splitChannelText(message.text, MAX_MESSAGE_LENGTH).map((text) => ({ text }));
+  }
+
+  async loadAttachment(
+    event: ChannelMessageEvent<SlackSocketMessage>,
+    attachment: ChannelAttachment,
+    signal?: AbortSignal,
+  ): Promise<ChannelAttachmentData> {
+    const file = event.raw.files.find((candidate) => candidate.id === attachment.id);
+    if (file === undefined) throw new Error(`Slack attachment ${attachment.id} is unavailable`);
+    return this.transport.loadAttachment(file, signal);
   }
 
   async start(handler: ChannelEventHandler<SlackSocketMessage>): Promise<void> {
