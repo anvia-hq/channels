@@ -69,6 +69,9 @@ pnpm build
 Run `pnpm verify:release` before publishing. Credential-backed verification remains an explicit
 release gate; see [`docs/live-verification.md`](./docs/live-verification.md).
 
+For package selection and complete application flows, start with the
+[`docs` guide](./docs/README.md).
+
 ## Telegram agent example
 
 The runnable example connects a Telegram bot to an Anvia agent backed by OpenAI and persistent

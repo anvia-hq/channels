@@ -1,5 +1,8 @@
 # `@anvia/channel`
 
+See the [detailed utility guide](../../docs/channel.md) for complete application and custom-adapter
+flows.
+
 Platform-neutral contracts and delivery helpers for communication channels.
 
 Incoming message events include normalized attachment metadata for images, audio, video, and

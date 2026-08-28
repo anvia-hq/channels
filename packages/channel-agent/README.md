@@ -1,5 +1,8 @@
 # `@anvia/channel-agent`
 
+See the [end-to-end integration guide](../../docs/channel-agent.md) for filtering, sessions,
+attachments, interactions, and shutdown.
+
 Connect an Anvia agent to any `@anvia/channel` adapter.
 
 ```ts

@@ -1,5 +1,8 @@
 # `@anvia/telegram`
 
+See the [detailed Telegram guide](../../docs/telegram.md) for polling, webhooks, proactive delivery,
+attachments, and agent integration.
+
 Telegram channel adapter for Anvia Channels.
 
 The default transport uses Telegram Bot API long polling, so local development does not require a
@@ -25,9 +28,11 @@ await channel.start(async (event) => {
     channel,
     {
       platform: "telegram",
-      accountId: event.accountId,
       conversationId: event.conversation.id,
-      threadId: event.conversation.threadId,
+      ...(event.accountId === undefined ? {} : { accountId: event.accountId }),
+      ...(event.conversation.threadId === undefined
+        ? {}
+        : { threadId: event.conversation.threadId }),
     },
     { text: `Received: ${event.text}` },
   );

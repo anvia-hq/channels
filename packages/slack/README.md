@@ -1,5 +1,8 @@
 # `@anvia/slack`
 
+See the [detailed Slack guide](../../docs/slack.md) for scopes, subscriptions, proactive delivery,
+threads, and agent integration.
+
 Slack Socket Mode and Web API adapter for Anvia Channels. Socket Mode receives Events API payloads
 without a public HTTP endpoint, while the Web API sends and edits text messages.
 
@@ -23,9 +26,11 @@ await channel.start(async (event) => {
     channel,
     {
       platform: "slack",
-      accountId: event.accountId,
       conversationId: event.conversation.id,
-      threadId: event.conversation.threadId,
+      ...(event.accountId === undefined ? {} : { accountId: event.accountId }),
+      ...(event.conversation.threadId === undefined
+        ? {}
+        : { threadId: event.conversation.threadId }),
     },
     { text: `Received: ${event.text}` },
   );
@@ -42,13 +47,20 @@ bot token containing these scopes:
 
 - `app_mentions:read`
 - `chat:write`
-- `files:read`
 - `im:history`
+
+Add feature-specific scopes when the application uses them:
+
+- `files:read` for incoming attachment downloads
+- `files:write` for outbound attachments
+- `reactions:write` for outbound reactions
+- `reactions:read` for incoming `reaction_added` and `reaction_removed` events
 
 Subscribe the bot to `app_mention` and `message.im`. This provides direct-message and explicit
 mention behavior without subscribing the app to every workspace message. To receive broader
 channel traffic, add the applicable `message.channels`, `message.groups`, or `message.mpim` events
-and their history scopes.
+and their history scopes. Subscribe to `reaction_added` and `reaction_removed` when incoming
+reaction lifecycle events are required.
 
 Enable **Interactivity & Shortcuts** for native message actions. Socket Mode acknowledges button
 payloads before application processing. Portable actions are rendered as Block Kit buttons.

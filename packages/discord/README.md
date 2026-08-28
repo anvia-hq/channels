@@ -1,5 +1,8 @@
 # `@anvia/discord`
 
+See the [detailed Discord guide](../../docs/discord.md) for setup, permissions, proactive delivery,
+threads, and agent integration.
+
 Discord Gateway and messaging adapter for Anvia Channels. It receives message-create events
 through `discord.js` and sends or edits text through Discord's rate-limit-aware REST client.
 
@@ -22,9 +25,11 @@ await channel.start(async (event) => {
     channel,
     {
       platform: "discord",
-      accountId: event.accountId,
       conversationId: event.conversation.id,
-      threadId: event.conversation.threadId,
+      ...(event.accountId === undefined ? {} : { accountId: event.accountId }),
+      ...(event.conversation.threadId === undefined
+        ? {}
+        : { threadId: event.conversation.threadId }),
     },
     { text: `Received: ${event.text}` },
   );
@@ -37,7 +42,9 @@ await channel.stop();
 The default Gateway intents receive guild messages, direct messages, and message content. Enable
 the **Message Content Intent** on the application's Bot page in the Discord Developer Portal. For
 a mention-only guild bot, set `messageContentIntent: false`; Discord still provides content in DMs
-and messages that mention the bot.
+and messages that mention the bot. Grant `VIEW_CHANNEL`, `SEND_MESSAGES`, and
+`READ_MESSAGE_HISTORY`, plus `SEND_MESSAGES_IN_THREADS`, `ATTACH_FILES`, and `ADD_REACTIONS` when
+the application uses those features.
 
 Incoming Discord threads are represented by a parent `conversationId` and their own `threadId`.
 Incoming images, audio, video, and other files are exposed as normalized attachments. Attachment
