@@ -127,8 +127,8 @@ Requirements: Node.js 24 or later and pnpm 11.
 ```sh
 pnpm check
 pnpm typecheck
-pnpm test
 pnpm build
+pnpm test
 ```
 
 Run the complete offline release gate with:
