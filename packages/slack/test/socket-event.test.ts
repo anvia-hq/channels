@@ -56,28 +56,32 @@ describe("parseSlackSocketEvent", () => {
   });
 
   it("runtime-validates attached Slack files", () => {
+    const parsed = parseSlackSocketEvent(
+      eventCallback({
+        type: "message",
+        subtype: "file_share",
+        channel: "D1",
+        channel_type: "im",
+        user: "U1",
+        text: "",
+        ts: "1700000000.000001",
+        files: [
+          {
+            id: "F1",
+            name: "photo.png",
+            mimetype: "image/png",
+            size: 123,
+            url_private_download: "https://files.slack.com/photo.png",
+          },
+        ],
+      }),
+      identity,
+    );
+    expect(parsed?.type).toBe("message");
     expect(
-      parseSlackSocketEvent(
-        eventCallback({
-          type: "message",
-          subtype: "file_share",
-          channel: "D1",
-          channel_type: "im",
-          user: "U1",
-          text: "",
-          ts: "1700000000.000001",
-          files: [
-            {
-              id: "F1",
-              name: "photo.png",
-              mimetype: "image/png",
-              size: 123,
-              url_private_download: "https://files.slack.com/photo.png",
-            },
-          ],
-        }),
-        identity,
-      )?.files,
+      parsed !== undefined && (parsed.type === "message" || parsed.type === "app_mention")
+        ? parsed.files
+        : undefined,
     ).toEqual([
       {
         id: "F1",
@@ -109,7 +113,52 @@ describe("parseSlackSocketEvent", () => {
     });
 
     expect(parseSlackSocketEvent(broadcast, identity)?.threadTimestamp).toBe("1700000000.000001");
-    expect(parseSlackSocketEvent(botMention, identity)?.senderBot).toBe(true);
+    const parsedBot = parseSlackSocketEvent(botMention, identity);
+    expect(
+      parsedBot !== undefined &&
+        (parsedBot.type === "message" || parsedBot.type === "app_mention") &&
+        parsedBot.senderBot,
+    ).toBe(true);
+  });
+
+  it("runtime-validates edit, delete, and reaction events", () => {
+    expect(
+      parseSlackSocketEvent(
+        eventCallback({
+          type: "message",
+          subtype: "message_changed",
+          channel: "C1",
+          message: {
+            user: "U1",
+            text: "edited",
+            ts: "1700000000.000001",
+          },
+        }),
+        identity,
+      ),
+    ).toMatchObject({ type: "message-edited", text: "edited" });
+    expect(
+      parseSlackSocketEvent(
+        eventCallback({
+          type: "message",
+          subtype: "message_deleted",
+          channel: "C1",
+          deleted_ts: "1700000000.000001",
+        }),
+        identity,
+      ),
+    ).toMatchObject({ type: "message-deleted", messageTimestamp: "1700000000.000001" });
+    expect(
+      parseSlackSocketEvent(
+        eventCallback({
+          type: "reaction_added",
+          user: "U1",
+          reaction: "thumbsup",
+          item: { type: "message", channel: "C1", ts: "1700000000.000001" },
+        }),
+        identity,
+      ),
+    ).toMatchObject({ type: "reaction", reaction: "thumbsup", removed: false });
   });
 
   it("ignores unsupported subtypes and malformed payloads", () => {

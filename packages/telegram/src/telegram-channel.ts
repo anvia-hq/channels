@@ -8,8 +8,16 @@ import type {
   ChannelMessageEvent,
   SentChannelMessage,
 } from "@anvia/channel";
-import { splitChannelMessage, validateChannelActions } from "@anvia/channel";
-import { TelegramApiError, createTelegramBotApiClient } from "./bot-api-client.js";
+import {
+  splitChannelMessage,
+  validateChannelActions,
+  validateChannelAttachments,
+} from "@anvia/channel";
+import {
+  TelegramApiError,
+  createTelegramBotApiClient,
+  parseTelegramUpdate,
+} from "./bot-api-client.js";
 import { normalizeTelegramUpdate } from "./normalize.js";
 import type { TelegramBotApi, TelegramUpdate, TelegramUser } from "./types.js";
 
@@ -30,8 +38,14 @@ export type TelegramChannelErrorContext = Readonly<{
   update?: TelegramUpdate;
 }>;
 
+export type TelegramWebhookOptions = Readonly<{
+  /** Value expected from Telegram's X-Telegram-Bot-Api-Secret-Token header. */
+  secretToken: string;
+}>;
+
 type TelegramChannelCommonOptions = Readonly<{
   polling?: TelegramPollingOptions;
+  webhook?: TelegramWebhookOptions;
   onError?: (error: unknown, context: TelegramChannelErrorContext) => void | Promise<void>;
 }>;
 
@@ -59,15 +73,31 @@ export function telegram(options: TelegramChannelOptions): TelegramChannel {
 
 export class TelegramChannel implements Channel<TelegramUpdate> {
   readonly platform = "telegram";
-  readonly capabilities = { actions: true } as const;
+  readonly capabilities = {
+    actions: true,
+    outboundAttachments: ["image", "audio", "video", "file"],
+    replies: true,
+    typing: true,
+    reactions: true,
+    delete: true,
+    messageEdits: true,
+  } as const;
 
   private readonly api: TelegramBotApi;
   private readonly polling: Required<TelegramPollingOptions>;
   private readonly onError: TelegramChannelCommonOptions["onError"];
+  private readonly webhook: Readonly<{ secretToken: string }> | undefined;
   private controller: AbortController | undefined;
   private loop: Promise<void> | undefined;
+  private handler: ChannelEventHandler<TelegramUpdate> | undefined;
+  private bot: TelegramUser | undefined;
+  private readonly handledWebhookUpdates = new Set<number>();
+  private readonly webhookDeliveries = new Map<number, Promise<void>>();
 
   constructor(options: TelegramChannelOptions) {
+    if (options.webhook !== undefined && options.polling !== undefined) {
+      throw new TypeError("Telegram polling and webhook options are mutually exclusive");
+    }
     this.api =
       options.api ??
       createTelegramBotApiClient({
@@ -79,6 +109,7 @@ export class TelegramChannel implements Channel<TelegramUpdate> {
           : { maximumAttachmentBytes: options.maximumAttachmentBytes }),
       });
     this.polling = resolvePollingOptions(options.polling);
+    this.webhook = resolveWebhookOptions(options.webhook);
     this.onError = options.onError;
   }
 
@@ -108,6 +139,12 @@ export class TelegramChannel implements Channel<TelegramUpdate> {
       throw error;
     }
 
+    if (this.webhook !== undefined) {
+      this.handler = handler;
+      this.bot = bot;
+      return;
+    }
+
     this.loop = this.poll(handler, bot, controller.signal).finally(() => {
       if (this.controller === controller) {
         this.controller = undefined;
@@ -122,18 +159,104 @@ export class TelegramChannel implements Channel<TelegramUpdate> {
     if (controller === undefined) return;
     controller.abort();
     await loop;
+    await Promise.allSettled(this.webhookDeliveries.values());
+    if (this.controller === controller) this.controller = undefined;
+    this.handler = undefined;
+    this.bot = undefined;
+  }
+
+  async receiveWebhook(value: unknown, secretToken?: string): Promise<void> {
+    const webhook = this.webhook;
+    if (webhook === undefined) throw new Error("Telegram webhook transport is not configured");
+    const controller = this.controller;
+    const handler = this.handler;
+    const bot = this.bot;
+    if (controller === undefined || handler === undefined || bot === undefined) {
+      throw new Error("Telegram channel is not running");
+    }
+    if (!sameSecret(webhook.secretToken, secretToken)) {
+      throw new Error("Telegram webhook secret token is invalid");
+    }
+    const update = parseTelegramUpdate(value);
+    if (this.handledWebhookUpdates.has(update.update_id)) return;
+    const existingDelivery = this.webhookDeliveries.get(update.update_id);
+    if (existingDelivery !== undefined) return existingDelivery;
+    const delivery = Promise.resolve().then(() =>
+      this.deliverWebhookUpdate(update, handler, bot, controller),
+    );
+    this.webhookDeliveries.set(update.update_id, delivery);
+    try {
+      await delivery;
+    } finally {
+      if (this.webhookDeliveries.get(update.update_id) === delivery) {
+        this.webhookDeliveries.delete(update.update_id);
+      }
+    }
+  }
+
+  private async deliverWebhookUpdate(
+    update: TelegramUpdate,
+    handler: ChannelEventHandler<TelegramUpdate>,
+    bot: TelegramUser,
+    controller: AbortController,
+  ): Promise<void> {
+    if (update.callback_query !== undefined) {
+      await this.api.answerCallbackQuery(
+        { callback_query_id: update.callback_query.id },
+        controller.signal,
+      );
+    }
+    if (controller.signal.aborted) return;
+    const events = normalizeTelegramUpdate(update, bot).filter(
+      (event) => !("sender" in event) || !event.sender.bot,
+    );
+    if (events.length === 0) {
+      rememberUpdate(this.handledWebhookUpdates, update.update_id);
+      return;
+    }
+    try {
+      for (const event of events) await handler(event);
+      rememberUpdate(this.handledWebhookUpdates, update.update_id);
+    } catch (error) {
+      await this.reportError(error, { operation: "handle", update });
+      throw error;
+    }
   }
 
   async send(address: ChannelAddress, message: ChannelMessage): Promise<SentChannelMessage> {
     validateAddress(address);
     validateMessage(message);
     const threadId = optionalPositiveInteger(address.threadId, "Telegram thread ID");
-    const sent = await this.api.sendMessage({
-      chat_id: chatId(address.conversationId),
-      text: message.text,
-      ...(threadId === undefined ? {} : { message_thread_id: threadId }),
-      ...telegramReplyMarkup(message),
-    });
+    const target = chatId(address.conversationId);
+    const replyMessageId = optionalPositiveInteger(
+      message.replyToMessageId,
+      "Telegram reply message ID",
+    );
+    let sent: Awaited<ReturnType<TelegramBotApi["sendMessage"]>> | undefined;
+    if (message.text.length > 0) {
+      sent = await this.api.sendMessage({
+        chat_id: target,
+        text: message.text,
+        ...(threadId === undefined ? {} : { message_thread_id: threadId }),
+        ...(replyMessageId === undefined
+          ? {}
+          : { reply_parameters: { message_id: replyMessageId } }),
+        ...telegramReplyMarkup(message),
+      });
+    }
+    for (const [index, attachment] of (message.attachments ?? []).entries()) {
+      const mediaMessage = await this.api.sendAttachment({
+        chat_id: target,
+        ...(threadId === undefined ? {} : { message_thread_id: threadId }),
+        attachment,
+        ...(sent !== undefined || replyMessageId === undefined
+          ? {}
+          : { reply_parameters: { message_id: replyMessageId } }),
+        ...(sent === undefined && index === 0 ? telegramReplyMarkup(message) : {}),
+      });
+      sent ??= mediaMessage;
+    }
+    if (sent === undefined) throw new Error("Telegram message did not produce a sent message");
     return {
       id: String(sent.message_id),
       address: {
@@ -152,11 +275,44 @@ export class TelegramChannel implements Channel<TelegramUpdate> {
   async edit(sent: SentChannelMessage, message: ChannelMessage): Promise<void> {
     validateAddress(sent.address);
     validateMessage(message);
+    if (message.attachments !== undefined || message.replyToMessageId !== undefined) {
+      throw new TypeError("Telegram message attachments and replies cannot be edited");
+    }
     await this.api.editMessageText({
       chat_id: chatId(sent.address.conversationId),
       message_id: positiveInteger(sent.id, "Telegram message ID"),
       text: message.text,
       ...telegramReplyMarkup(message, true),
+    });
+  }
+
+  async delete(sent: SentChannelMessage): Promise<void> {
+    validateSentMessage(sent);
+    await this.api.deleteMessage({
+      chat_id: chatId(sent.address.conversationId),
+      message_id: positiveInteger(sent.id, "Telegram message ID"),
+    });
+  }
+
+  async showTyping(address: ChannelAddress): Promise<void> {
+    validateAddress(address);
+    const threadId = optionalPositiveInteger(address.threadId, "Telegram thread ID");
+    await this.api.sendChatAction({
+      chat_id: chatId(address.conversationId),
+      ...(threadId === undefined ? {} : { message_thread_id: threadId }),
+      action: "typing",
+    });
+  }
+
+  async react(sent: SentChannelMessage, reaction: string): Promise<void> {
+    validateSentMessage(sent);
+    if (typeof reaction !== "string" || reaction.length === 0) {
+      throw new TypeError("Telegram reaction must not be empty");
+    }
+    await this.api.setMessageReaction({
+      chat_id: chatId(sent.address.conversationId),
+      message_id: positiveInteger(sent.id, "Telegram message ID"),
+      reaction: [{ type: "emoji", emoji: reaction }],
     });
   }
 
@@ -176,7 +332,7 @@ export class TelegramChannel implements Channel<TelegramUpdate> {
             ...(offset === undefined ? {} : { offset }),
             limit: this.polling.limit,
             timeout: this.polling.timeoutSeconds,
-            allowed_updates: ["message", "callback_query"],
+            allowed_updates: ["message", "edited_message", "message_reaction", "callback_query"],
           },
           signal,
         );
@@ -208,15 +364,17 @@ export class TelegramChannel implements Channel<TelegramUpdate> {
             break;
           }
         }
-        const event = normalizeTelegramUpdate(update, bot);
-        if (event === undefined || event.sender.bot) {
+        const events = normalizeTelegramUpdate(update, bot).filter(
+          (event) => !("sender" in event) || !event.sender.bot,
+        );
+        if (events.length === 0) {
           offset = nextOffset(offset, update.update_id);
           rememberUpdate(handledUpdates, update.update_id);
           continue;
         }
 
         try {
-          await handler(event);
+          for (const event of events) await handler(event);
           offset = nextOffset(offset, update.update_id);
           rememberUpdate(handledUpdates, update.update_id);
         } catch (error) {
@@ -257,6 +415,16 @@ function resolvePollingOptions(
   };
 }
 
+function resolveWebhookOptions(
+  options: TelegramWebhookOptions | undefined,
+): Readonly<{ secretToken: string }> | undefined {
+  if (options === undefined) return undefined;
+  if (!/^[A-Za-z0-9_-]{1,256}$/.test(options.secretToken)) {
+    throw new TypeError("Telegram webhook secret token is invalid");
+  }
+  return { secretToken: options.secretToken };
+}
+
 function validateAddress(address: ChannelAddress): void {
   if (address.platform !== "telegram") {
     throw new TypeError(`Telegram channel cannot use a ${address.platform} address`);
@@ -266,13 +434,30 @@ function validateAddress(address: ChannelAddress): void {
 }
 
 function validateMessage(message: ChannelMessage): void {
-  if (typeof message.text !== "string" || message.text.length === 0) {
-    throw new TypeError("Telegram message text must not be empty");
+  if (
+    typeof message.text !== "string" ||
+    (message.text.length === 0 && message.attachments === undefined)
+  ) {
+    throw new TypeError("Telegram message must include text or attachments");
   }
   if (message.text.length > MAX_MESSAGE_LENGTH) {
     throw new RangeError(`Telegram message text must not exceed ${MAX_MESSAGE_LENGTH} characters`);
   }
   validateChannelActions(message.actions);
+  validateChannelAttachments(message.attachments);
+  optionalPositiveInteger(message.replyToMessageId, "Telegram reply message ID");
+}
+
+function validateSentMessage(sent: SentChannelMessage): void {
+  validateAddress(sent.address);
+  positiveInteger(sent.id, "Telegram message ID");
+}
+
+function sameSecret(expected: string, actual: string | undefined): boolean {
+  if (actual === undefined) return false;
+  const expectedBytes = Buffer.from(expected);
+  const actualBytes = Buffer.from(actual);
+  return expectedBytes.length === actualBytes.length && timingSafeEqual(expectedBytes, actualBytes);
 }
 
 function telegramReplyMarkup(
@@ -365,3 +550,4 @@ function abortableDelay(milliseconds: number, signal: AbortSignal): Promise<void
     }
   });
 }
+import { timingSafeEqual } from "node:crypto";

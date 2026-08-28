@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { normalizeDiscordAction, normalizeDiscordMessage } from "../src/index.js";
+import {
+  normalizeDiscordAction,
+  normalizeDiscordEvent,
+  normalizeDiscordMessage,
+} from "../src/index.js";
 import { discordMessage } from "./helpers.js";
 
 describe("normalizeDiscordMessage", () => {
@@ -74,6 +78,42 @@ describe("normalizeDiscordMessage", () => {
       sender: { displayName: "Indra Z" },
       mentionedBot: true,
     });
+  });
+
+  it("preserves reply references and normalizes lifecycle events", () => {
+    expect(
+      normalizeDiscordMessage(
+        discordMessage({
+          replyToMessageId: "70",
+          replyToUser: { id: "41", username: "alex", bot: false },
+        }),
+      ),
+    ).toMatchObject({ replyTo: { messageId: "70", sender: { id: "41" } } });
+    expect(
+      normalizeDiscordEvent({
+        type: "message-deleted",
+        id: "70:deleted",
+        channelId: "20",
+        messageId: "70",
+        bot: { id: "50", username: "anvia", bot: true },
+        direct: false,
+        thread: false,
+      }),
+    ).toMatchObject({ type: "message-deleted", messageId: "70" });
+    expect(
+      normalizeDiscordEvent({
+        type: "reaction",
+        id: "reaction-1",
+        channelId: "20",
+        messageId: "70",
+        reaction: "👍",
+        removed: false,
+        user: { id: "40", username: "indra", bot: false },
+        bot: { id: "50", username: "anvia", bot: true },
+        direct: false,
+        thread: false,
+      }),
+    ).toMatchObject({ type: "reaction", reaction: "👍", removed: false });
   });
 
   it("preserves the parent channel and thread address", () => {

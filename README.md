@@ -29,6 +29,11 @@ Slack, Discord, and Telegram also render platform-neutral message actions as nat
 tool approvals and single-choice questions use those controls automatically while retaining a text
 reply fallback for custom adapters without action support.
 
+Outbound images, audio, video, and files accept either HTTPS URLs or base64 data. Reply context,
+message edits, deletions, reactions, and typing indicators are normalized or exposed when the
+selected platform supports them. Inspect `channel.capabilities` before calling an optional
+operation from a custom integration.
+
 ## Proactive delivery
 
 Monitors, workers, and application services can send without starting an agent bridge. Use the
@@ -46,7 +51,8 @@ await sendChannelMessage(
 );
 ```
 
-`Channel.send()` remains the low-level operation for exactly one platform-sized message.
+`Channel.send()` remains the low-level operation for one platform-sized logical delivery. An
+adapter may need multiple platform API calls to upload several attachments.
 
 ## Development
 
@@ -59,6 +65,9 @@ pnpm typecheck
 pnpm test
 pnpm build
 ```
+
+Run `pnpm verify:release` before publishing. Credential-backed verification remains an explicit
+release gate; see [`docs/live-verification.md`](./docs/live-verification.md).
 
 ## Telegram agent example
 

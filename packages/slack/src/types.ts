@@ -46,7 +46,53 @@ export type SlackSocketAction = Readonly<{
   botUserId: string;
 }>;
 
-export type SlackSocketEvent = SlackSocketMessage | SlackSocketAction;
+export type SlackSocketMessageEdited = Readonly<{
+  type: "message-edited";
+  eventId: string;
+  teamId: string;
+  channelId: string;
+  channelType: SlackChannelType;
+  messageTimestamp: string;
+  threadTimestamp?: string;
+  senderId: string;
+  senderDisplayName?: string;
+  senderBot: boolean;
+  text: string;
+  files: readonly SlackFile[];
+  botUserId: string;
+}>;
+
+export type SlackSocketMessageDeleted = Readonly<{
+  type: "message-deleted";
+  eventId: string;
+  teamId: string;
+  channelId: string;
+  channelType: SlackChannelType;
+  messageTimestamp: string;
+  threadTimestamp?: string;
+  botUserId: string;
+}>;
+
+export type SlackSocketReaction = Readonly<{
+  type: "reaction";
+  eventId: string;
+  teamId: string;
+  channelId: string;
+  channelType: SlackChannelType;
+  messageTimestamp: string;
+  threadTimestamp?: string;
+  senderId: string;
+  reaction: string;
+  removed: boolean;
+  botUserId: string;
+}>;
+
+export type SlackSocketEvent =
+  | SlackSocketMessage
+  | SlackSocketAction
+  | SlackSocketMessageEdited
+  | SlackSocketMessageDeleted
+  | SlackSocketReaction;
 
 export type SlackSentMessage = Readonly<{
   channelId: string;
@@ -65,5 +111,7 @@ export interface SlackTransport {
     message: ChannelMessage,
   ): Promise<SlackSentMessage>;
   edit(channelId: string, timestamp: string, message: ChannelMessage): Promise<void>;
+  delete(channelId: string, timestamp: string): Promise<void>;
+  react(channelId: string, timestamp: string, reaction: string): Promise<void>;
   loadAttachment(file: SlackFile, signal?: AbortSignal): Promise<ChannelAttachmentData>;
 }

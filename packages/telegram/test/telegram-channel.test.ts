@@ -32,7 +32,7 @@ describe("TelegramChannel", () => {
     expect(fake.getUpdates.mock.calls[0]?.[0]).toEqual({
       limit: 100,
       timeout: 30,
-      allowed_updates: ["message", "callback_query"],
+      allowed_updates: ["message", "edited_message", "message_reaction", "callback_query"],
     });
     expect(fake.getUpdates.mock.calls[1]?.[0]).toMatchObject({ offset: 11 });
 
@@ -165,7 +165,7 @@ describe("TelegramChannel", () => {
       },
     };
     fake.getUpdates.mockResolvedValueOnce([update]).mockImplementation(waitForAbort);
-    const handler = vi.fn(async () => undefined);
+    const handler = vi.fn<(event: unknown) => Promise<void>>(async () => undefined);
     const channel = telegram({ api: fake.api });
 
     await channel.send(
@@ -203,6 +203,120 @@ describe("TelegramChannel", () => {
     await channel.stop();
   });
 
+  it("authenticates and dispatches webhook updates", async () => {
+    const fake = fakeApi();
+    const handler = vi.fn(async () => undefined);
+    const channel = telegram({ api: fake.api, webhook: { secretToken: "webhook_secret" } });
+    await channel.start(handler);
+
+    await expect(channel.receiveWebhook(textUpdate(25), "wrong")).rejects.toThrow(
+      "secret token is invalid",
+    );
+    await channel.receiveWebhook(textUpdate(25), "webhook_secret");
+    await channel.receiveWebhook(textUpdate(25), "webhook_secret");
+
+    expect(fake.getUpdates).not.toHaveBeenCalled();
+    expect(handler).toHaveBeenCalledOnce();
+    expect(handler).toHaveBeenCalledWith(expect.objectContaining({ id: "25", text: "hello" }));
+    await channel.stop();
+  });
+
+  it("coalesces concurrent deliveries of the same webhook update", async () => {
+    const fake = fakeApi();
+    let releaseHandler: (() => void) | undefined;
+    let markStarted: (() => void) | undefined;
+    const started = new Promise<void>((resolve) => {
+      markStarted = resolve;
+    });
+    const handlerGate = new Promise<void>((resolve) => {
+      releaseHandler = resolve;
+    });
+    const handler = vi.fn(async () => {
+      markStarted?.();
+      await handlerGate;
+    });
+    const channel = telegram({ api: fake.api, webhook: { secretToken: "webhook_secret" } });
+    await channel.start(handler);
+
+    const first = channel.receiveWebhook(textUpdate(26), "webhook_secret");
+    await started;
+    const duplicate = channel.receiveWebhook(textUpdate(26), "webhook_secret");
+    releaseHandler?.();
+    await Promise.all([first, duplicate]);
+
+    expect(handler).toHaveBeenCalledOnce();
+    await channel.stop();
+  });
+
+  it("dispatches every reaction change from one update", async () => {
+    const update: TelegramUpdate = {
+      update_id: 27,
+      message_reaction: {
+        chat: { id: -100, type: "supergroup" },
+        message_id: 7,
+        user: { id: 5, is_bot: false, first_name: "Indra" },
+        date: 1_700_000_000,
+        old_reaction: [{ type: "emoji", emoji: "👍" }],
+        new_reaction: [{ type: "emoji", emoji: "❤️" }],
+      },
+    };
+    const fake = fakeApi();
+    fake.getUpdates.mockResolvedValueOnce([update]).mockImplementation(waitForAbort);
+    const handler = vi.fn<(event: unknown) => Promise<void>>(async () => undefined);
+    const channel = telegram({ api: fake.api });
+
+    await channel.start(handler);
+    await vi.waitFor(() => expect(handler).toHaveBeenCalledTimes(2));
+
+    expect(handler.mock.calls.map(([event]) => event)).toMatchObject([
+      { reaction: "👍", removed: true },
+      { reaction: "❤️", removed: false },
+    ]);
+    await channel.stop();
+  });
+
+  it("sends attachments, replies, typing, reactions, and deletion", async () => {
+    const fake = fakeApi();
+    const channel = telegram({ api: fake.api });
+    const sent = await channel.send(
+      { platform: "telegram", conversationId: "-100" },
+      {
+        text: "report",
+        replyToMessageId: "12",
+        attachments: [
+          {
+            type: "file",
+            mediaType: "application/pdf",
+            filename: "report.pdf",
+            source: { type: "data", data: "cGRm" },
+          },
+        ],
+      },
+    );
+
+    expect(fake.sendMessage).toHaveBeenCalledWith({
+      chat_id: -100,
+      text: "report",
+      reply_parameters: { message_id: 12 },
+    });
+    expect(fake.sendAttachment).toHaveBeenCalledWith(
+      expect.objectContaining({
+        chat_id: -100,
+        attachment: expect.objectContaining({ type: "file" }),
+      }),
+    );
+    await channel.showTyping({ platform: "telegram", conversationId: "-100" });
+    await channel.react(sent, "👍");
+    await channel.delete(sent);
+    expect(fake.sendChatAction).toHaveBeenCalledWith({ chat_id: -100, action: "typing" });
+    expect(fake.setMessageReaction).toHaveBeenCalledWith({
+      chat_id: -100,
+      message_id: 77,
+      reaction: [{ type: "emoji", emoji: "👍" }],
+    });
+    expect(fake.deleteMessage).toHaveBeenCalledWith({ chat_id: -100, message_id: 77 });
+  });
+
   it("loads Telegram media through the authenticated Bot API", async () => {
     const fake = fakeApi();
     const channel = telegram({ api: fake.api });
@@ -215,7 +329,7 @@ describe("TelegramChannel", () => {
         photo: [{ file_id: "photo-id", width: 100, height: 100, file_size: 3 }],
       },
     };
-    const event = normalizeTelegramUpdate(update, bot);
+    const event = normalizeTelegramUpdate(update, bot)[0];
     if (event?.type !== "message" || event.attachments[0] === undefined) {
       throw new Error("Expected a normalized attachment");
     }
@@ -257,8 +371,12 @@ type FakeApi = Readonly<{
   getMe: ReturnType<typeof vi.fn<TelegramBotApi["getMe"]>>;
   getUpdates: ReturnType<typeof vi.fn<TelegramBotApi["getUpdates"]>>;
   sendMessage: ReturnType<typeof vi.fn<TelegramBotApi["sendMessage"]>>;
+  sendAttachment: ReturnType<typeof vi.fn<TelegramBotApi["sendAttachment"]>>;
   editMessageText: ReturnType<typeof vi.fn<TelegramBotApi["editMessageText"]>>;
   answerCallbackQuery: ReturnType<typeof vi.fn<TelegramBotApi["answerCallbackQuery"]>>;
+  deleteMessage: ReturnType<typeof vi.fn<TelegramBotApi["deleteMessage"]>>;
+  sendChatAction: ReturnType<typeof vi.fn<TelegramBotApi["sendChatAction"]>>;
+  setMessageReaction: ReturnType<typeof vi.fn<TelegramBotApi["setMessageReaction"]>>;
   downloadFile: ReturnType<typeof vi.fn<TelegramBotApi["downloadFile"]>>;
 }>;
 
@@ -268,23 +386,44 @@ function fakeApi(): FakeApi {
   const sendMessage = vi
     .fn<TelegramBotApi["sendMessage"]>()
     .mockResolvedValue(sentTelegramMessage());
+  const sendAttachment = vi
+    .fn<TelegramBotApi["sendAttachment"]>()
+    .mockResolvedValue(sentTelegramMessage());
   const editMessageText = vi
     .fn<TelegramBotApi["editMessageText"]>()
     .mockResolvedValue(sentTelegramMessage());
   const answerCallbackQuery = vi
     .fn<TelegramBotApi["answerCallbackQuery"]>()
     .mockResolvedValue(true);
+  const deleteMessage = vi.fn<TelegramBotApi["deleteMessage"]>().mockResolvedValue(true);
+  const sendChatAction = vi.fn<TelegramBotApi["sendChatAction"]>().mockResolvedValue(true);
+  const setMessageReaction = vi.fn<TelegramBotApi["setMessageReaction"]>().mockResolvedValue(true);
   const downloadFile = vi.fn<TelegramBotApi["downloadFile"]>().mockResolvedValue({
     type: "data",
     data: "ZmFrZQ==",
   });
   return {
-    api: { getMe, getUpdates, sendMessage, editMessageText, answerCallbackQuery, downloadFile },
+    api: {
+      getMe,
+      getUpdates,
+      sendMessage,
+      sendAttachment,
+      editMessageText,
+      answerCallbackQuery,
+      deleteMessage,
+      sendChatAction,
+      setMessageReaction,
+      downloadFile,
+    },
     getMe,
     getUpdates,
     sendMessage,
+    sendAttachment,
     editMessageText,
     answerCallbackQuery,
+    deleteMessage,
+    sendChatAction,
+    setMessageReaction,
     downloadFile,
   };
 }

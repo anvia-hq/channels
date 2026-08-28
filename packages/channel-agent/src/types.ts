@@ -95,7 +95,7 @@ export type ChannelAgentOptions<RawEvent = unknown, Output = string> = Readonly<
   renderOutcome?: (
     outcome: AgentOutcome<Output>,
     event: ChannelEvent<RawEvent>,
-  ) => string | Promise<string>;
+  ) => string | ChannelMessage | Promise<string | ChannelMessage>;
   streaming?: ChannelAgentStreamingOptions;
   multimodal?: false | ChannelAgentMultimodalOptions;
   interactions?: false | ChannelAgentInteractionOptions<RawEvent>;

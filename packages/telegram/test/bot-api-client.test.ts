@@ -138,6 +138,76 @@ describe("Telegram Bot API client", () => {
     expect(fetch.mock.calls[1]?.[0]).toContain("/answerCallbackQuery");
   });
 
+  it("runtime-validates custom and paid reaction updates", async () => {
+    const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValue(
+      jsonResponse({
+        ok: true,
+        result: [
+          {
+            update_id: 21,
+            message_reaction: {
+              chat: { id: -100, type: "channel", title: "Anvia" },
+              message_id: 7,
+              actor_chat: { id: -200, type: "channel", title: "Release Bot" },
+              date: 1_700_000_000,
+              old_reaction: [{ type: "custom_emoji", custom_emoji_id: "custom-1" }],
+              new_reaction: [{ type: "paid" }],
+            },
+          },
+        ],
+      }),
+    );
+    const api = createTelegramBotApiClient({ token: "123:test-token", fetch });
+
+    await expect(api.getUpdates({ allowed_updates: ["message_reaction"] })).resolves.toMatchObject([
+      {
+        message_reaction: {
+          actor_chat: { id: -200 },
+          date: 1_700_000_000,
+          old_reaction: [{ type: "custom_emoji", custom_emoji_id: "custom-1" }],
+          new_reaction: [{ type: "paid" }],
+        },
+      },
+    ]);
+  });
+
+  it("sends URL and base64 attachments with the correct Bot API encoding", async () => {
+    const result = {
+      ok: true,
+      result: { message_id: 77, chat: { id: -100, type: "supergroup" } },
+    };
+    const fetch = vi
+      .fn<typeof globalThis.fetch>()
+      .mockResolvedValueOnce(jsonResponse(result))
+      .mockResolvedValueOnce(jsonResponse(result));
+    const api = createTelegramBotApiClient({ token: "123:test-token", fetch });
+
+    await api.sendAttachment({
+      chat_id: -100,
+      attachment: {
+        type: "image",
+        mediaType: "image/png",
+        source: { type: "url", url: "https://example.com/image.png" },
+      },
+    });
+    await api.sendAttachment({
+      chat_id: -100,
+      attachment: {
+        type: "file",
+        mediaType: "application/pdf",
+        filename: "report.pdf",
+        source: { type: "data", data: "cGRm" },
+      },
+    });
+
+    expect(fetch.mock.calls[0]?.[0]).toContain("/sendPhoto");
+    expect(fetch.mock.calls[0]?.[1]).toMatchObject({
+      body: JSON.stringify({ chat_id: -100, photo: "https://example.com/image.png" }),
+    });
+    expect(fetch.mock.calls[1]?.[0]).toContain("/sendDocument");
+    expect(fetch.mock.calls[1]?.[1]?.body).toBeInstanceOf(FormData);
+  });
+
   it.each([
     ["empty file ID", { file_id: "", width: 10, height: 20 }, "file_id was empty"],
     ["negative width", { file_id: "photo-id", width: -1, height: 20 }, "positive integer"],

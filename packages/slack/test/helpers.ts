@@ -12,6 +12,8 @@ export type FakeSlackTransport = Readonly<{
   stop: ReturnType<typeof vi.fn<SlackTransport["stop"]>>;
   send: ReturnType<typeof vi.fn<SlackTransport["send"]>>;
   edit: ReturnType<typeof vi.fn<SlackTransport["edit"]>>;
+  delete: ReturnType<typeof vi.fn<SlackTransport["delete"]>>;
+  react: ReturnType<typeof vi.fn<SlackTransport["react"]>>;
   loadAttachment: ReturnType<typeof vi.fn<SlackTransport["loadAttachment"]>>;
   emit(event: SlackSocketEvent): Promise<void>;
 }>;
@@ -28,17 +30,21 @@ export function fakeTransport(): FakeSlackTransport {
     ...(threadTimestamp === undefined ? {} : { threadTimestamp }),
   }));
   const edit = vi.fn<SlackTransport["edit"]>(async () => undefined);
+  const deleteMessage = vi.fn<SlackTransport["delete"]>(async () => undefined);
+  const react = vi.fn<SlackTransport["react"]>(async () => undefined);
   const loadAttachment = vi.fn<SlackTransport["loadAttachment"]>(async () => ({
     type: "data",
     data: "ZmFrZQ==",
   }));
 
   return {
-    transport: { start, stop, send, edit, loadAttachment },
+    transport: { start, stop, send, edit, delete: deleteMessage, react, loadAttachment },
     start,
     stop,
     send,
     edit,
+    delete: deleteMessage,
+    react,
     loadAttachment,
     async emit(message) {
       if (handler === undefined) throw new Error("Fake Slack transport is not running");

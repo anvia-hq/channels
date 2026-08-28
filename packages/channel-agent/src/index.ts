@@ -15,6 +15,7 @@ export {
   renderChannelAgentInteraction,
 } from "./interactions.js";
 export { channelMessagePrompt } from "./prompts.js";
+export { SqliteChannelAgentInteractionStore } from "./sqlite-interaction-store.js";
 export type {
   ChannelAgentErrorContext,
   ChannelAgentExecutor,
@@ -31,3 +32,4 @@ export type {
   ChannelAgentInteractionStore,
   PendingChannelAgentInteraction,
 } from "./interactions.js";
+export type { SqliteChannelAgentInteractionStoreOptions } from "./sqlite-interaction-store.js";

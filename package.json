@@ -19,7 +19,8 @@
     "lint": "oxlint .",
     "lint:fix": "oxlint --fix .",
     "test": "pnpm -r --if-present test",
-    "typecheck": "pnpm -r --if-present typecheck"
+    "typecheck": "pnpm -r --if-present typecheck",
+    "verify:release": "pnpm check && pnpm typecheck && pnpm build && pnpm test"
   },
   "devDependencies": {
     "@types/node": "^24.9.1",

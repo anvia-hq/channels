@@ -30,6 +30,8 @@ export type DiscordGatewayMessage = Readonly<{
   thread: boolean;
   system: boolean;
   mentionedBot: boolean;
+  replyToMessageId?: string;
+  replyToUser?: DiscordGatewayUser;
 }>;
 
 export type DiscordGatewayAction = Readonly<{
@@ -46,7 +48,49 @@ export type DiscordGatewayAction = Readonly<{
   thread: boolean;
 }>;
 
-export type DiscordGatewayEvent = DiscordGatewayMessage | DiscordGatewayAction;
+export type DiscordGatewayMessageEdited = Omit<
+  DiscordGatewayMessage,
+  "type" | "id" | "mentionedBot" | "replyToMessageId" | "replyToUser"
+> &
+  Readonly<{
+    type: "message-edited";
+    id: string;
+    messageId: string;
+  }>;
+
+export type DiscordGatewayMessageDeleted = Readonly<{
+  type: "message-deleted";
+  id: string;
+  channelId: string;
+  guildId?: string;
+  parentChannelId?: string;
+  messageId: string;
+  bot: DiscordGatewayUser;
+  direct: boolean;
+  thread: boolean;
+}>;
+
+export type DiscordGatewayReaction = Readonly<{
+  type: "reaction";
+  id: string;
+  channelId: string;
+  guildId?: string;
+  parentChannelId?: string;
+  messageId: string;
+  reaction: string;
+  removed: boolean;
+  user: DiscordGatewayUser;
+  bot: DiscordGatewayUser;
+  direct: boolean;
+  thread: boolean;
+}>;
+
+export type DiscordGatewayEvent =
+  | DiscordGatewayMessage
+  | DiscordGatewayAction
+  | DiscordGatewayMessageEdited
+  | DiscordGatewayMessageDeleted
+  | DiscordGatewayReaction;
 
 export type DiscordGatewaySentMessage = Readonly<{
   id: string;
@@ -60,4 +104,7 @@ export interface DiscordGateway {
   stop(): Promise<void>;
   send(channelId: string, message: ChannelMessage): Promise<DiscordGatewaySentMessage>;
   edit(channelId: string, messageId: string, message: ChannelMessage): Promise<void>;
+  delete(channelId: string, messageId: string): Promise<void>;
+  showTyping(channelId: string): Promise<void>;
+  react(channelId: string, messageId: string, reaction: string): Promise<void>;
 }

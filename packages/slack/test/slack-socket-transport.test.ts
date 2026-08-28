@@ -98,6 +98,34 @@ describe("SlackSocketTransport Web API delivery", () => {
     );
   });
 
+  it("uploads outbound attachments after posting the message", async () => {
+    const fake = fakeWebClient();
+    fake.postMessage.mockResolvedValue({
+      ok: true,
+      channel: "C1",
+      ts: "1700000001.000002",
+    });
+    const transport = new SlackSocketTransport(tokens(), fake.web);
+    const attachment = {
+      type: "file" as const,
+      mediaType: "application/pdf",
+      filename: "report.pdf",
+      source: { type: "data" as const, data: "cGRm" },
+    };
+
+    await transport.send("C1", "1700000000.000001", {
+      text: "report",
+      attachments: [attachment],
+    });
+
+    expect(fake.uploadFile).toHaveBeenCalledWith(
+      "C1",
+      "1700000000.000001",
+      attachment,
+      20 * 1024 * 1024,
+    );
+  });
+
   it("downloads private files with bot authentication and returns base64", async () => {
     const fetch = vi
       .fn<typeof globalThis.fetch>()
@@ -209,6 +237,9 @@ type FakeWebClient = Readonly<{
   authenticate: ReturnType<typeof vi.fn<SlackWebClient["authenticate"]>>;
   postMessage: ReturnType<typeof vi.fn<SlackWebClient["postMessage"]>>;
   updateMessage: ReturnType<typeof vi.fn<SlackWebClient["updateMessage"]>>;
+  deleteMessage: ReturnType<typeof vi.fn<SlackWebClient["deleteMessage"]>>;
+  addReaction: ReturnType<typeof vi.fn<SlackWebClient["addReaction"]>>;
+  uploadFile: ReturnType<typeof vi.fn<SlackWebClient["uploadFile"]>>;
   downloadFile: ReturnType<typeof vi.fn<SlackWebClient["downloadFile"]>>;
 }>;
 
@@ -218,15 +249,29 @@ function fakeWebClient(): FakeWebClient {
     .mockResolvedValue({ ok: true, team_id: "T1", user_id: "U2" });
   const postMessage = vi.fn<SlackWebClient["postMessage"]>();
   const updateMessage = vi.fn<SlackWebClient["updateMessage"]>().mockResolvedValue({ ok: true });
+  const deleteMessage = vi.fn<SlackWebClient["deleteMessage"]>().mockResolvedValue({ ok: true });
+  const addReaction = vi.fn<SlackWebClient["addReaction"]>().mockResolvedValue({ ok: true });
+  const uploadFile = vi.fn<SlackWebClient["uploadFile"]>().mockResolvedValue({ ok: true });
   const downloadFile = vi.fn<SlackWebClient["downloadFile"]>().mockResolvedValue({
     type: "data",
     data: "ZmFrZQ==",
   });
   return {
-    web: { authenticate, postMessage, updateMessage, downloadFile },
+    web: {
+      authenticate,
+      postMessage,
+      updateMessage,
+      deleteMessage,
+      addReaction,
+      uploadFile,
+      downloadFile,
+    },
     authenticate,
     postMessage,
     updateMessage,
+    deleteMessage,
+    addReaction,
+    uploadFile,
     downloadFile,
   };
 }

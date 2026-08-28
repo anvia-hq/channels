@@ -121,6 +121,21 @@ customizable through `interactions.render`, `interactions.parseResponse`, and
 `interactions.parseAction`. Custom actions returned by a renderer must have a matching
 `parseAction` implementation. Set `interactions: false` to retain terminal, non-resumable rendering
 instead.
+
+Node.js 24 applications can use the included SQLite store without another dependency:
+
+```ts
+import { SqliteChannelAgentInteractionStore, createChannelAgent } from "@anvia/channel-agent";
+
+const interactions = new SqliteChannelAgentInteractionStore({ database: "interactions.sqlite" });
+const service = createChannelAgent({ channel, agent, interactions: { store: interactions } });
+```
+
+The store validates persisted continuations when they are read and atomically deletes a claimed
+interaction with `DELETE … RETURNING`. Close stores that own their database during application
+shutdown, restrict access to the database file, and encrypt its storage when continuations may
+contain sensitive tool state. Agent outcome renderers may return a full `ChannelMessage`, including
+outbound files.
 Continuation stores and resumed tools do not provide exactly-once execution; make externally
 mutating tools idempotent when retries are possible.
 

@@ -4,6 +4,7 @@ import {
   splitChannelMessage,
   splitChannelText,
   validateChannelActions,
+  validateChannelAttachments,
 } from "../src/index.js";
 import type {
   Channel,
@@ -53,6 +54,47 @@ describe("channel message delivery", () => {
     expect(() => validateChannelActions([{ id: "x".repeat(65), label: "Too long" }])).toThrow(
       "64 UTF-8 bytes",
     );
+  });
+
+  it("validates outbound attachments and keeps them on the final part", () => {
+    const attachment = {
+      type: "file" as const,
+      mediaType: "application/pdf",
+      filename: "report.pdf",
+      source: { type: "data" as const, data: "cGRm" },
+    };
+
+    expect(() => validateChannelAttachments([attachment])).not.toThrow();
+    expect(
+      splitChannelMessage(
+        { text: "abcdef", replyToMessageId: "message-1", attachments: [attachment] },
+        3,
+      ),
+    ).toEqual([
+      { text: "abc", replyToMessageId: "message-1" },
+      { text: "def", replyToMessageId: "message-1", attachments: [attachment] },
+    ]);
+    expect(splitChannelMessage({ text: "", attachments: [attachment] }, 3)).toEqual([
+      { text: "", attachments: [attachment] },
+    ]);
+    expect(() =>
+      validateChannelAttachments([
+        { ...attachment, source: { type: "url", url: "http://insecure.example/report.pdf" } },
+      ]),
+    ).toThrow("must use HTTPS");
+    expect(() =>
+      validateChannelAttachments([{ ...attachment, source: { type: "data", data: "***" } }]),
+    ).toThrow("valid base64");
+    for (const data of ["==", "A=", "AA="]) {
+      expect(() =>
+        validateChannelAttachments([{ ...attachment, source: { type: "data", data } }]),
+      ).toThrow("valid base64");
+    }
+    for (const data of ["Zg", "Zg==", "Zm8", "Zm8=", "Zm9v"]) {
+      expect(() =>
+        validateChannelAttachments([{ ...attachment, source: { type: "data", data } }]),
+      ).not.toThrow();
+    }
   });
 
   it("does not split a surrogate pair", () => {

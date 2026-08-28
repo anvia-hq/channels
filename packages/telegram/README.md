@@ -2,8 +2,9 @@
 
 Telegram channel adapter for Anvia Channels.
 
-The initial transport uses Telegram Bot API long polling, so local development does not require a
-public HTTP endpoint. Webhook support is planned separately.
+The default transport uses Telegram Bot API long polling, so local development does not require a
+public HTTP endpoint. Hosted applications can instead pass validated webhook updates directly to
+the channel.
 
 ## Usage
 
@@ -19,6 +20,7 @@ const channel = telegram({
 });
 
 await channel.start(async (event) => {
+  if (event.type !== "message") return;
   await sendChannelMessage(
     channel,
     {
@@ -43,6 +45,31 @@ are stream-capped to 20 MiB by default; set `maximumAttachmentBytes` on `telegra
 different application limit. Messages sent by bots and unsupported updates are acknowledged
 without invoking the handler.
 Portable message actions are rendered as inline keyboards. Callback queries are acknowledged
-before application processing and normalized as action events.
+before application processing and normalized as action events. `normalizeTelegramUpdate` returns an
+event array because one Telegram reaction update can remove and add several reactions. Ordinary
+emoji values are preserved; custom and paid reactions use `telegram:custom_emoji:<id>` and
+`telegram:paid` portable values.
 `sendChannelMessage` splits long text into ordered messages at Telegram's boundary; `channel.send`
-sends one atomic message and rejects oversized text.
+validates one platform-sized logical delivery and rejects oversized text. A message with several
+attachments uses multiple Bot API calls and may be partially delivered if an upload fails.
+
+## Webhook transport
+
+Configure Telegram's webhook URL separately, including the same secret token, and forward the
+parsed request body plus the `X-Telegram-Bot-Api-Secret-Token` header:
+
+```ts
+const channel = telegram({
+  token: process.env.TELEGRAM_BOT_TOKEN!,
+  webhook: { secretToken: process.env.TELEGRAM_WEBHOOK_SECRET! },
+});
+await channel.start(handler);
+
+// Inside a Fetch-compatible POST route:
+const body: unknown = await request.json();
+const secret = request.headers.get("x-telegram-bot-api-secret-token") ?? undefined;
+await channel.receiveWebhook(body, secret);
+```
+
+Webhook payloads are runtime-validated before dispatch. Secret comparison is timing-safe. Do not
+configure `polling` and `webhook` together.

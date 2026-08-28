@@ -3,12 +3,7 @@ import type {
   AgentInteractionRequest,
   AgentInteractionResponse,
 } from "@anvia/core/agent/interactions";
-import type {
-  ChannelAction,
-  ChannelActionEvent,
-  ChannelEvent,
-  ChannelMessageEvent,
-} from "@anvia/channel";
+import type { ChannelAction, ChannelActionEvent, ChannelMessageEvent } from "@anvia/channel";
 import { MAX_CHANNEL_ACTION_LABEL_LENGTH } from "@anvia/channel";
 import { channelConversationKey } from "./defaults.js";
 
@@ -58,7 +53,7 @@ export class MemoryChannelAgentInteractionStore implements ChannelAgentInteracti
   }
 }
 
-export function channelInteractionKey(event: ChannelEvent): string {
+export function channelInteractionKey(event: ChannelActionEvent | ChannelMessageEvent): string {
   return JSON.stringify([channelConversationKey(event), event.sender.id]);
 }
 

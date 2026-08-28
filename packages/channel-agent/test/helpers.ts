@@ -15,9 +15,10 @@ import type {
 
 export class FakeChannel implements Channel {
   readonly platform = "test";
-  readonly capabilities: { readonly actions: boolean };
+  readonly capabilities: { readonly actions: boolean; readonly delete: true };
   readonly sent: Array<{ address: ChannelAddress; message: ChannelMessage }> = [];
   readonly edits: Array<{ sent: SentChannelMessage; message: ChannelMessage }> = [];
+  readonly deleted: SentChannelMessage[] = [];
   startCount = 0;
   stopCount = 0;
   splitCount = 0;
@@ -29,7 +30,7 @@ export class FakeChannel implements Channel {
     private readonly maximumMessageLength = Number.MAX_SAFE_INTEGER,
     actions = true,
   ) {
-    this.capabilities = { actions };
+    this.capabilities = { actions, delete: true };
   }
 
   splitMessage(message: ChannelMessage): readonly ChannelMessage[] {
@@ -64,6 +65,10 @@ export class FakeChannel implements Channel {
 
   async edit(sent: SentChannelMessage, message: ChannelMessage): Promise<void> {
     this.edits.push({ sent, message });
+  }
+
+  async delete(sent: SentChannelMessage): Promise<void> {
+    this.deleted.push(sent);
   }
 
   async emit(event: ChannelEvent): Promise<void> {

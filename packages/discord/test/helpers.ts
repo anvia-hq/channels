@@ -12,6 +12,9 @@ export type FakeDiscordGateway = Readonly<{
   stop: ReturnType<typeof vi.fn<DiscordGateway["stop"]>>;
   send: ReturnType<typeof vi.fn<DiscordGateway["send"]>>;
   edit: ReturnType<typeof vi.fn<DiscordGateway["edit"]>>;
+  delete: ReturnType<typeof vi.fn<DiscordGateway["delete"]>>;
+  showTyping: ReturnType<typeof vi.fn<DiscordGateway["showTyping"]>>;
+  react: ReturnType<typeof vi.fn<DiscordGateway["react"]>>;
   emit(event: DiscordGatewayEvent): Promise<void>;
 }>;
 
@@ -26,13 +29,19 @@ export function fakeGateway(): FakeDiscordGateway {
     channelId,
   }));
   const edit = vi.fn<DiscordGateway["edit"]>(async () => undefined);
+  const deleteMessage = vi.fn<DiscordGateway["delete"]>(async () => undefined);
+  const showTyping = vi.fn<DiscordGateway["showTyping"]>(async () => undefined);
+  const react = vi.fn<DiscordGateway["react"]>(async () => undefined);
 
   return {
-    gateway: { start, stop, send, edit },
+    gateway: { start, stop, send, edit, delete: deleteMessage, showTyping, react },
     start,
     stop,
     send,
     edit,
+    delete: deleteMessage,
+    showTyping,
+    react,
     async emit(message) {
       if (handler === undefined) throw new Error("Fake Discord gateway is not running");
       await handler(message);

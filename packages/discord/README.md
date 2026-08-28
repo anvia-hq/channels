@@ -17,6 +17,7 @@ const channel = discord({
 });
 
 await channel.start(async (event) => {
+  if (event.type !== "message") return;
   await sendChannelMessage(
     channel,
     {
@@ -44,5 +45,10 @@ loading returns Discord's HTTPS CDN URL without downloading the file into applic
 Outbound mentions are disabled so agent-generated text cannot unexpectedly ping users or roles.
 Portable message actions are rendered as Discord buttons, and button interactions are acknowledged
 before application processing.
+Outbound attachments, replies, typing indicators, reactions, and message deletion use Discord's
+REST API. Gateway message edits, deletions, and reaction changes are normalized as lifecycle events.
+Partial reaction objects from uncached messages are resolved before delivery. Outbound files are
+downloaded sequentially, and `maximumAttachmentBytes` caps both each file and the combined bytes
+buffered for one Discord message.
 `sendChannelMessage` splits long text into ordered messages at Discord's boundary; `channel.send`
-sends one atomic message and rejects oversized text.
+validates one platform-sized logical delivery and rejects oversized text.

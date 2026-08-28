@@ -5,7 +5,9 @@ import type {
   TelegramMediaFile,
   TelegramMessage,
   TelegramMessageEntity,
+  TelegramMessageReactionUpdated,
   TelegramPhotoSize,
+  TelegramReactionType,
   TelegramUpdate,
   TelegramUser,
 } from "./types.js";
@@ -56,13 +58,18 @@ export function createTelegramBotApiClient(options: TelegramBotApiClientOptions)
     throw new TypeError("A Fetch API implementation is required");
   }
 
-  const call = async (method: string, body: object, signal?: AbortSignal): Promise<unknown> => {
+  const request = async (
+    method: string,
+    body: string | FormData,
+    contentType: string | undefined,
+    signal?: AbortSignal,
+  ): Promise<unknown> => {
     let response: Response;
     try {
       response = await fetchImplementation(`${baseUrl}/bot${token}/${method}`, {
         method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify(body),
+        ...(contentType === undefined ? {} : { headers: { "content-type": contentType } }),
+        body,
         ...(signal === undefined ? {} : { signal }),
       });
     } catch (error) {
@@ -101,6 +108,8 @@ export function createTelegramBotApiClient(options: TelegramBotApiClientOptions)
     }
     return envelope.result;
   };
+  const call = (method: string, body: object, signal?: AbortSignal) =>
+    request(method, JSON.stringify(body), "application/json", signal);
 
   return {
     async getMe(signal) {
@@ -112,11 +121,63 @@ export function createTelegramBotApiClient(options: TelegramBotApiClientOptions)
       if (!Array.isArray(result)) {
         throw new TelegramApiError("getUpdates", "result was not an array");
       }
-      return result.map((update, index) => telegramUpdate(update, `getUpdates result[${index}]`));
+      return result.map((update, index) =>
+        parseTelegramUpdate(update, `getUpdates result[${index}]`),
+      );
     },
 
     async sendMessage(request, signal) {
       return telegramMessage(await call("sendMessage", request, signal), "sendMessage result");
+    },
+
+    async sendAttachment(sendRequest, signal) {
+      if (
+        sendRequest.attachment.size !== undefined &&
+        sendRequest.attachment.size > maximumAttachmentBytes
+      ) {
+        throw new RangeError(`Telegram attachment must not exceed ${maximumAttachmentBytes} bytes`);
+      }
+      const method = attachmentMethod(sendRequest.attachment.type);
+      const field = attachmentField(sendRequest.attachment.type);
+      const common = {
+        chat_id: sendRequest.chat_id,
+        ...(sendRequest.message_thread_id === undefined
+          ? {}
+          : { message_thread_id: sendRequest.message_thread_id }),
+        ...(sendRequest.caption === undefined ? {} : { caption: sendRequest.caption }),
+        ...(sendRequest.reply_parameters === undefined
+          ? {}
+          : { reply_parameters: sendRequest.reply_parameters }),
+        ...(sendRequest.reply_markup === undefined
+          ? {}
+          : { reply_markup: sendRequest.reply_markup }),
+      };
+      let result: unknown;
+      if (sendRequest.attachment.source.type === "url") {
+        result = await call(
+          method,
+          { ...common, [field]: sendRequest.attachment.source.url },
+          signal,
+        );
+      } else {
+        const bytes = Buffer.from(sendRequest.attachment.source.data, "base64");
+        if (bytes.byteLength > maximumAttachmentBytes) {
+          throw new RangeError(
+            `Telegram attachment must not exceed ${maximumAttachmentBytes} bytes`,
+          );
+        }
+        const form = new FormData();
+        for (const [key, value] of Object.entries(common)) {
+          form.set(key, typeof value === "string" ? value : JSON.stringify(value));
+        }
+        form.set(
+          field,
+          new Blob([bytes], { type: sendRequest.attachment.mediaType }),
+          sendRequest.attachment.filename ?? "attachment",
+        );
+        result = await request(method, form, undefined, signal);
+      }
+      return telegramMessage(result, `${method} result`);
     },
 
     async editMessageText(request, signal) {
@@ -131,6 +192,18 @@ export function createTelegramBotApiClient(options: TelegramBotApiClientOptions)
         throw new TelegramApiError("answerCallbackQuery", "result was not true");
       }
       return true;
+    },
+
+    async deleteMessage(request, signal) {
+      return trueResult("deleteMessage", await call("deleteMessage", request, signal));
+    },
+
+    async sendChatAction(request, signal) {
+      return trueResult("sendChatAction", await call("sendChatAction", request, signal));
+    },
+
+    async setMessageReaction(request, signal) {
+      return trueResult("setMessageReaction", await call("setMessageReaction", request, signal));
     },
 
     async downloadFile(fileId, signal) {
@@ -169,6 +242,25 @@ export function createTelegramBotApiClient(options: TelegramBotApiClientOptions)
       }
     },
   };
+}
+
+function trueResult(method: string, value: unknown): true {
+  if (value !== true) throw new TelegramApiError(method, "result was not true");
+  return true;
+}
+
+function attachmentMethod(type: "image" | "audio" | "video" | "file"): string {
+  if (type === "image") return "sendPhoto";
+  if (type === "audio") return "sendAudio";
+  if (type === "video") return "sendVideo";
+  return "sendDocument";
+}
+
+function attachmentField(type: "image" | "audio" | "video" | "file"): string {
+  if (type === "image") return "photo";
+  if (type === "audio") return "audio";
+  if (type === "video") return "video";
+  return "document";
 }
 
 async function readResponseBase64(response: Response, maximumBytes: number): Promise<string> {
@@ -238,12 +330,14 @@ function responseRetryAfter(value: unknown): number | undefined {
   return optionalInteger(parameters.retry_after);
 }
 
-function telegramUpdate(value: unknown, label: string): TelegramUpdate {
+export function parseTelegramUpdate(value: unknown, label = "Telegram update"): TelegramUpdate {
   const raw = object(value, label);
   const updateId = integer(raw.update_id, `${label}.update_id`);
   const result: {
     update_id: number;
     message?: TelegramMessage;
+    edited_message?: TelegramMessage;
+    message_reaction?: TelegramMessageReactionUpdated;
     callback_query?: TelegramCallbackQuery;
   } = {
     update_id: updateId,
@@ -251,10 +345,67 @@ function telegramUpdate(value: unknown, label: string): TelegramUpdate {
   if (raw.message !== undefined) {
     result.message = telegramMessage(raw.message, `${label}.message`);
   }
+  if (raw.edited_message !== undefined) {
+    result.edited_message = telegramMessage(raw.edited_message, `${label}.edited_message`);
+  }
+  if (raw.message_reaction !== undefined) {
+    result.message_reaction = telegramMessageReaction(
+      raw.message_reaction,
+      `${label}.message_reaction`,
+    );
+  }
   if (raw.callback_query !== undefined) {
     result.callback_query = telegramCallbackQuery(raw.callback_query, `${label}.callback_query`);
   }
   return result;
+}
+
+function telegramMessageReaction(value: unknown, label: string): TelegramMessageReactionUpdated {
+  const raw = object(value, label);
+  const result: {
+    chat: TelegramChat;
+    message_id: number;
+    user?: TelegramUser;
+    actor_chat?: TelegramChat;
+    date: number;
+    old_reaction: readonly TelegramReactionType[];
+    new_reaction: readonly TelegramReactionType[];
+  } = {
+    chat: telegramChat(raw.chat, `${label}.chat`),
+    message_id: integer(raw.message_id, `${label}.message_id`),
+    date: integer(raw.date, `${label}.date`),
+    old_reaction: telegramReactions(raw.old_reaction, `${label}.old_reaction`),
+    new_reaction: telegramReactions(raw.new_reaction, `${label}.new_reaction`),
+  };
+  if (raw.user !== undefined) result.user = telegramUser(raw.user, `${label}.user`);
+  if (raw.actor_chat !== undefined) {
+    result.actor_chat = telegramChat(raw.actor_chat, `${label}.actor_chat`);
+  }
+  if (result.user === undefined && result.actor_chat === undefined) {
+    throw new TypeError(`${label} did not include a user or actor_chat`);
+  }
+  return result;
+}
+
+function telegramReactions(value: unknown, label: string): readonly TelegramReactionType[] {
+  if (!Array.isArray(value)) throw new TypeError(`${label} was not an array`);
+  return value.map((candidate, index) => {
+    const reaction = object(candidate, `${label}[${index}]`);
+    if (reaction.type === "emoji") {
+      return { type: "emoji", emoji: nonemptyString(reaction.emoji, `${label}[${index}].emoji`) };
+    }
+    if (reaction.type === "custom_emoji") {
+      return {
+        type: "custom_emoji",
+        custom_emoji_id: nonemptyString(
+          reaction.custom_emoji_id,
+          `${label}[${index}].custom_emoji_id`,
+        ),
+      };
+    }
+    if (reaction.type === "paid") return { type: "paid" };
+    throw new TypeError(`${label}[${index}].type was not a supported reaction type`);
+  });
 }
 
 function telegramCallbackQuery(value: unknown, label: string): TelegramCallbackQuery {

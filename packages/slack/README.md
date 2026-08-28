@@ -18,6 +18,7 @@ const channel = slack({
 });
 
 await channel.start(async (event) => {
+  if (event.type !== "message") return;
   await sendChannelMessage(
     channel,
     {
@@ -61,5 +62,10 @@ Incoming images and other files are normalized and downloaded with the bot token
 application or agent loads them. The authenticated Slack URL is not exposed to the model. Downloads
 are limited to 20 MiB by default; set `maximumAttachmentBytes` to choose a different application
 limit.
+Outbound attachments are uploaded with `files.uploadV2`; replies use Slack thread timestamps.
+Reactions and message deletion use the Web API, while Socket Mode normalizes message changes,
+deletions, and reaction events. Slack does not expose a general bot typing-indicator API, so the
+adapter does not advertise that capability.
 `sendChannelMessage` splits long text into ordered messages at Slack's boundary; `channel.send`
-sends one atomic message and rejects oversized text.
+validates one platform-sized logical delivery and rejects oversized text. A message with several
+files uses multiple Web API calls and may be partially delivered if an upload fails.

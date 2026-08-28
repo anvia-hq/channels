@@ -1,7 +1,24 @@
-import type { ChannelActionEvent, ChannelMessageEvent } from "@anvia/channel";
+import type { ChannelActionEvent, ChannelEvent, ChannelMessageEvent } from "@anvia/channel";
 import { isChannelActionId } from "@anvia/channel";
 import { isDiscordSnowflake } from "./snowflake.js";
-import type { DiscordGatewayAction, DiscordGatewayMessage } from "./types.js";
+import type {
+  DiscordGatewayAction,
+  DiscordGatewayEvent,
+  DiscordGatewayMessage,
+  DiscordGatewayMessageDeleted,
+  DiscordGatewayMessageEdited,
+  DiscordGatewayReaction,
+} from "./types.js";
+
+export function normalizeDiscordEvent(
+  event: DiscordGatewayEvent,
+): ChannelEvent<DiscordGatewayEvent> | undefined {
+  if (event.type === "action") return normalizeDiscordAction(event);
+  if (event.type === "message-edited") return normalizeDiscordEdit(event);
+  if (event.type === "message-deleted") return normalizeDiscordDelete(event);
+  if (event.type === "reaction") return normalizeDiscordReaction(event);
+  return normalizeDiscordMessage(event);
+}
 
 export function normalizeDiscordMessage(
   message: DiscordGatewayMessage,
@@ -46,9 +63,141 @@ export function normalizeDiscordMessage(
         size: attachment.size,
       };
     }),
+    ...(message.replyToMessageId === undefined
+      ? {}
+      : {
+          replyTo: {
+            messageId: message.replyToMessageId,
+            ...(message.replyToUser === undefined
+              ? {}
+              : {
+                  sender: {
+                    id: message.replyToUser.id,
+                    displayName: message.replyToUser.globalName ?? message.replyToUser.username,
+                    bot: message.replyToUser.bot,
+                  },
+                }),
+          },
+        }),
     mentionedBot: message.mentionedBot,
     raw: message,
   };
+}
+
+function normalizeDiscordEdit(
+  event: DiscordGatewayMessageEdited,
+): ChannelEvent<DiscordGatewayMessageEdited> | undefined {
+  if (!validEditedMessage(event) || event.system) return undefined;
+  return {
+    type: "message-edited",
+    id: event.id,
+    platform: "discord",
+    accountId: event.bot.id,
+    conversation: gatewayConversation(event),
+    sender: {
+      id: event.author.id,
+      displayName: event.memberDisplayName ?? event.author.globalName ?? event.author.username,
+      bot: event.author.bot,
+    },
+    messageId: event.messageId,
+    text: event.content,
+    attachments: event.attachments.map(normalizedAttachment),
+    raw: event,
+  };
+}
+
+function normalizeDiscordDelete(
+  event: DiscordGatewayMessageDeleted,
+): ChannelEvent<DiscordGatewayMessageDeleted> | undefined {
+  if (!validLifecycleBase(event)) return undefined;
+  return {
+    type: "message-deleted",
+    id: event.id,
+    platform: "discord",
+    accountId: event.bot.id,
+    conversation: gatewayConversation(event),
+    messageId: event.messageId,
+    raw: event,
+  };
+}
+
+function normalizeDiscordReaction(
+  event: DiscordGatewayReaction,
+): ChannelEvent<DiscordGatewayReaction> | undefined {
+  if (
+    !validLifecycleBase(event) ||
+    !validUser(event.user) ||
+    typeof event.reaction !== "string" ||
+    event.reaction.length === 0 ||
+    typeof event.removed !== "boolean"
+  ) {
+    return undefined;
+  }
+  return {
+    type: "reaction",
+    id: event.id,
+    platform: "discord",
+    accountId: event.bot.id,
+    conversation: gatewayConversation(event),
+    sender: {
+      id: event.user.id,
+      displayName: event.user.globalName ?? event.user.username,
+      bot: event.user.bot,
+    },
+    messageId: event.messageId,
+    reaction: event.reaction,
+    removed: event.removed,
+    raw: event,
+  };
+}
+
+function validEditedMessage(event: DiscordGatewayMessageEdited): boolean {
+  return (
+    validLifecycleBase(event) &&
+    validUser(event.author) &&
+    typeof event.content === "string" &&
+    Array.isArray(event.attachments) &&
+    event.attachments.every(validAttachment) &&
+    (event.memberDisplayName === undefined || typeof event.memberDisplayName === "string") &&
+    typeof event.system === "boolean"
+  );
+}
+
+function validLifecycleBase(
+  event: DiscordGatewayMessageEdited | DiscordGatewayMessageDeleted | DiscordGatewayReaction,
+): boolean {
+  return (
+    typeof event.id === "string" &&
+    event.id.length > 0 &&
+    isDiscordSnowflake(event.channelId) &&
+    isDiscordSnowflake(event.messageId) &&
+    (event.guildId === undefined || isDiscordSnowflake(event.guildId)) &&
+    (event.parentChannelId === undefined || isDiscordSnowflake(event.parentChannelId)) &&
+    validUser(event.bot) &&
+    typeof event.direct === "boolean" &&
+    typeof event.thread === "boolean"
+  );
+}
+
+function gatewayConversation(
+  event: DiscordGatewayMessageEdited | DiscordGatewayMessageDeleted | DiscordGatewayReaction,
+) {
+  return {
+    id: event.parentChannelId ?? event.channelId,
+    kind: event.direct ? "direct" : "channel",
+    ...(event.thread ? { threadId: event.channelId } : {}),
+  } as const;
+}
+
+function normalizedAttachment(attachment: DiscordGatewayMessage["attachments"][number]) {
+  const mediaType = attachment.mediaType ?? mediaTypeFromFilename(attachment.filename);
+  return {
+    id: attachment.id,
+    type: attachmentType(mediaType),
+    mediaType,
+    filename: attachment.filename,
+    size: attachment.size,
+  } as const;
 }
 
 export function normalizeDiscordAction(
@@ -103,7 +252,9 @@ function validDiscordMessage(message: DiscordGatewayMessage): boolean {
     typeof message.direct === "boolean" &&
     typeof message.thread === "boolean" &&
     typeof message.system === "boolean" &&
-    typeof message.mentionedBot === "boolean"
+    typeof message.mentionedBot === "boolean" &&
+    (message.replyToMessageId === undefined || isDiscordSnowflake(message.replyToMessageId)) &&
+    (message.replyToUser === undefined || validUser(message.replyToUser))
   );
 }
 

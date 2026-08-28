@@ -8,9 +8,11 @@ general files. An adapter that emits attachments implements
 data. Adapters own authenticated downloads, so platform credentials never need to appear in shared
 events or agent prompts. Text-only adapters can omit `loadAttachment`.
 
-`Channel.send()` sends one platform-sized message. Use `sendChannelMessage()` for application or
-worker output that may exceed a platform limit. The channel's `splitMessage()` implementation owns
-the platform-specific boundary, while the helper preserves part ordering.
+`Channel.send()` sends one platform-sized logical delivery. Use `sendChannelMessage()` for
+application or worker output that may exceed a platform limit. The channel's `splitMessage()`
+implementation owns the platform-specific boundary, while the helper preserves part ordering.
+Adapters may require multiple API calls for several attachments, so callers should handle partial
+delivery and make retries idempotent.
 
 ```ts
 import { sendChannelMessage } from "@anvia/channel";
@@ -45,3 +47,19 @@ Custom adapters implement `splitMessage(message)` in addition to lifecycle, send
 non-empty message and preserve the original content when its text parts are concatenated.
 `splitChannelMessage(message, maximumLength)` provides a whitespace-aware, surrogate-safe default
 that also preserves actions. `splitChannelText(text, maximumLength)` remains available for raw text.
+
+## Outbound media and lifecycle operations
+
+`ChannelMessage.attachments` supports images, audio, video, and general files sourced from an HTTPS
+URL or base64 bytes. Attachments and actions stay on the final part of a split message; reply
+metadata is retained on every part. A media-only message uses an empty `text` value.
+
+Adapters advertise support through `Channel.capabilities`. Reply targets use
+`message.replyToMessageId`; incoming replies expose `event.replyTo`. Optional `showTyping`, `react`,
+and `delete` methods provide portable lifecycle operations. Incoming edits, deletions, and reactions
+are emitted as `message-edited`, `message-deleted`, and `reaction` events. Platforms that do not
+offer a particular event or operation omit the corresponding capability or method.
+
+Treat outbound attachment URLs as trusted application input. Slack and Discord download URL-backed
+files in the application process; applications accepting user- or model-selected URLs should pass a
+restricted Fetch implementation that enforces an allowlist and blocks private network targets.

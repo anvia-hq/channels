@@ -132,6 +132,32 @@ describe("SlackChannel", () => {
 
     await channel.edit(sent, { text: "resolved" });
     expect(fake.edit).toHaveBeenCalledWith("C1", "1700000001.000002", { text: "resolved" });
+
+    await channel.react(sent, "thumbsup");
+    await channel.delete(sent);
+    expect(fake.react).toHaveBeenCalledWith("C1", "1700000001.000002", "thumbsup");
+    expect(fake.delete).toHaveBeenCalledWith("C1", "1700000001.000002");
+  });
+
+  it("forwards outbound attachments and reply references", async () => {
+    const fake = fakeTransport();
+    const channel = slack({ transport: fake.transport });
+    const message = {
+      text: "report",
+      replyToMessageId: "1700000000.000001",
+      attachments: [
+        {
+          type: "file" as const,
+          mediaType: "application/pdf",
+          filename: "report.pdf",
+          source: { type: "data" as const, data: "cGRm" },
+        },
+      ],
+    };
+
+    await channel.send({ platform: "slack", conversationId: "C1" }, message);
+
+    expect(fake.send).toHaveBeenCalledWith("C1", "1700000000.000001", message);
   });
 
   it("loads private attachments through the authenticated transport", async () => {

@@ -469,6 +469,86 @@ describe("ChannelAgentService", () => {
     await service.stop();
   });
 
+  it("replaces a streaming placeholder with a rich outcome", async () => {
+    const channel = new FakeChannel();
+    const service = await serveChannelAgent({
+      channel,
+      agent: fakeAgent({ streaming: false }),
+      streaming: { enabled: false },
+      renderOutcome: () => ({
+        text: "report",
+        attachments: [
+          {
+            type: "file",
+            mediaType: "application/pdf",
+            filename: "report.pdf",
+            source: { type: "data", data: "cGRm" },
+          },
+        ],
+      }),
+    });
+
+    await channel.emit(messageEvent());
+
+    expect(channel.sent.map((item) => item.message.text)).toEqual(["Thinking…", "report"]);
+    expect(channel.deleted.map((message) => message.id)).toEqual(["1"]);
+    await service.stop();
+  });
+
+  it("delivers a media-only rich outcome", async () => {
+    const channel = new FakeChannel();
+    const attachment = {
+      type: "file" as const,
+      mediaType: "application/pdf",
+      filename: "report.pdf",
+      source: { type: "data" as const, data: "cGRm" },
+    };
+    const service = await serveChannelAgent({
+      channel,
+      agent: fakeAgent({ streaming: false }),
+      streaming: { placeholder: false },
+      renderOutcome: () => ({ text: "", attachments: [attachment] }),
+    });
+
+    await channel.emit(messageEvent());
+
+    expect(channel.sent).toEqual([
+      expect.objectContaining({ message: { text: "", attachments: [attachment] } }),
+    ]);
+    await service.stop();
+  });
+
+  it("skips placeholders for attachment-capable channels without deletion", async () => {
+    const channel = new FakeChannel();
+    Object.defineProperties(channel, {
+      capabilities: {
+        value: { actions: true, outboundAttachments: ["file"] },
+      },
+      delete: { value: undefined },
+    });
+    const service = await serveChannelAgent({
+      channel,
+      agent: fakeAgent({ streaming: false }),
+      streaming: { enabled: false },
+      renderOutcome: () => ({
+        text: "report",
+        attachments: [
+          {
+            type: "file",
+            mediaType: "application/pdf",
+            source: { type: "data", data: "cGRm" },
+          },
+        ],
+      }),
+    });
+
+    await channel.emit(messageEvent());
+
+    expect(channel.sent.map((item) => item.message.text)).toEqual(["report"]);
+    expect(channel.edits).toEqual([]);
+    await service.stop();
+  });
+
   it("serializes runs per conversation while allowing unrelated conversations", async () => {
     const channel = new FakeChannel();
     const first = deferred<AgentOutcome<string>>();

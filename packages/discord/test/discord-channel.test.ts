@@ -115,6 +115,34 @@ describe("DiscordChannel", () => {
 
     await channel.edit(sent, { text: "resolved" });
     expect(fake.edit).toHaveBeenCalledWith("21", "77", { text: "resolved" });
+
+    await channel.showTyping(sent.address);
+    await channel.react(sent, "👍");
+    await channel.delete(sent);
+    expect(fake.showTyping).toHaveBeenCalledWith("21");
+    expect(fake.react).toHaveBeenCalledWith("21", "77", "👍");
+    expect(fake.delete).toHaveBeenCalledWith("21", "77");
+  });
+
+  it("forwards outbound attachments and reply references", async () => {
+    const fake = fakeGateway();
+    const channel = discord({ gateway: fake.gateway });
+    const message = {
+      text: "report",
+      replyToMessageId: "76",
+      attachments: [
+        {
+          type: "file" as const,
+          mediaType: "application/pdf",
+          filename: "report.pdf",
+          source: { type: "data" as const, data: "cGRm" },
+        },
+      ],
+    };
+
+    await channel.send({ platform: "discord", conversationId: "20" }, message);
+
+    expect(fake.send).toHaveBeenCalledWith("20", message);
   });
 
   it("resolves normalized attachments to Discord CDN URLs", async () => {

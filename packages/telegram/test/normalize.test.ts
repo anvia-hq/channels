@@ -18,18 +18,20 @@ describe("normalizeTelegramUpdate", () => {
       text: "hello",
     });
 
-    expect(normalizeTelegramUpdate(update, bot)).toEqual({
-      type: "message",
-      id: "10",
-      platform: "telegram",
-      accountId: "42",
-      conversation: { id: "5", kind: "direct" },
-      sender: { id: "7", displayName: "Indra Zulfi", bot: false },
-      text: "hello",
-      attachments: [],
-      mentionedBot: false,
-      raw: update,
-    });
+    expect(normalizeTelegramUpdate(update, bot)).toEqual([
+      {
+        type: "message",
+        id: "10",
+        platform: "telegram",
+        accountId: "42",
+        conversation: { id: "5", kind: "direct" },
+        sender: { id: "7", displayName: "Indra Zulfi", bot: false },
+        text: "hello",
+        attachments: [],
+        mentionedBot: false,
+        raw: update,
+      },
+    ]);
   });
 
   it("normalizes the largest photo and accepts captionless media", () => {
@@ -43,7 +45,7 @@ describe("normalizeTelegramUpdate", () => {
       ],
     });
 
-    const event = normalizeTelegramUpdate(update, bot);
+    const event = normalizeTelegramUpdate(update, bot)[0];
     expect(event?.type === "message" ? event.attachments : undefined).toEqual([
       { id: "large", type: "image", mediaType: "image/jpeg", size: 100 },
     ]);
@@ -60,7 +62,7 @@ describe("normalizeTelegramUpdate", () => {
       entities: [{ type: "mention", offset: 6, length: 10 }],
     });
 
-    expect(normalizeTelegramUpdate(update, bot)).toMatchObject({
+    expect(normalizeTelegramUpdate(update, bot)[0]).toMatchObject({
       conversation: { id: "-100", kind: "group", threadId: "9" },
       mentionedBot: true,
     });
@@ -82,10 +84,79 @@ describe("normalizeTelegramUpdate", () => {
       replyToBot: true,
     });
 
-    const commandEvent = normalizeTelegramUpdate(command, bot);
-    const replyEvent = normalizeTelegramUpdate(reply, bot);
+    const commandEvent = normalizeTelegramUpdate(command, bot)[0];
+    const replyEvent = normalizeTelegramUpdate(reply, bot)[0];
     expect(commandEvent?.type === "message" && commandEvent.mentionedBot).toBe(true);
     expect(replyEvent?.type === "message" && replyEvent.mentionedBot).toBe(true);
+    expect(replyEvent).toMatchObject({
+      replyTo: { messageId: "99", sender: { id: "42", bot: true }, text: "previous" },
+    });
+  });
+
+  it("normalizes edited messages and reactions", () => {
+    const edited: TelegramUpdate = {
+      update_id: 20,
+      edited_message: {
+        message_id: 10,
+        from: { id: 7, is_bot: false, first_name: "Indra" },
+        chat: { id: 5, type: "private" },
+        text: "edited",
+      },
+    };
+    const reaction: TelegramUpdate = {
+      update_id: 21,
+      message_reaction: {
+        chat: { id: 5, type: "private" },
+        message_id: 10,
+        user: { id: 7, is_bot: false, first_name: "Indra" },
+        date: 1_700_000_000,
+        old_reaction: [],
+        new_reaction: [{ type: "emoji", emoji: "👍" }],
+      },
+    };
+
+    expect(normalizeTelegramUpdate(edited, bot)[0]).toMatchObject({
+      type: "message-edited",
+      messageId: "10",
+      text: "edited",
+    });
+    expect(normalizeTelegramUpdate(reaction, bot)[0]).toMatchObject({
+      type: "reaction",
+      messageId: "10",
+      reaction: "👍",
+      removed: false,
+    });
+  });
+
+  it("emits every reaction delta and supports anonymous custom reactions", () => {
+    const update: TelegramUpdate = {
+      update_id: 22,
+      message_reaction: {
+        chat: { id: -100, type: "channel", title: "Anvia" },
+        message_id: 10,
+        actor_chat: { id: -200, type: "channel", title: "Release Bot" },
+        date: 1_700_000_001,
+        old_reaction: [{ type: "emoji", emoji: "👍" }],
+        new_reaction: [{ type: "custom_emoji", custom_emoji_id: "custom-1" }],
+      },
+    };
+
+    expect(normalizeTelegramUpdate(update, bot)).toMatchObject([
+      {
+        type: "reaction",
+        id: "22:reaction:1",
+        sender: { id: "-200", displayName: "Release Bot", bot: false },
+        reaction: "👍",
+        removed: true,
+      },
+      {
+        type: "reaction",
+        id: "22:reaction:2",
+        sender: { id: "-200", displayName: "Release Bot", bot: false },
+        reaction: "telegram:custom_emoji:custom-1",
+        removed: false,
+      },
+    ]);
   });
 
   it("normalizes callback queries as action events", () => {
@@ -104,7 +175,7 @@ describe("normalizeTelegramUpdate", () => {
       },
     };
 
-    expect(normalizeTelegramUpdate(update, bot)).toMatchObject({
+    expect(normalizeTelegramUpdate(update, bot)[0]).toMatchObject({
       type: "action",
       id: "15",
       actionId: "anvia:token:approve",
@@ -115,7 +186,7 @@ describe("normalizeTelegramUpdate", () => {
   });
 
   it("ignores updates without text or a user sender", () => {
-    expect(normalizeTelegramUpdate({ update_id: 1 }, bot)).toBeUndefined();
+    expect(normalizeTelegramUpdate({ update_id: 1 }, bot)).toEqual([]);
     expect(
       normalizeTelegramUpdate(
         {
@@ -124,7 +195,7 @@ describe("normalizeTelegramUpdate", () => {
         },
         bot,
       ),
-    ).toBeUndefined();
+    ).toEqual([]);
   });
 });
 

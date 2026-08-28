@@ -8,25 +8,48 @@ import {
   type ButtonInteraction,
   type Interaction,
   type Message,
+  type ClientEvents,
+  type MessageReaction,
+  type User,
 } from "discord.js";
 import { isDiscordSnowflake } from "./snowflake.js";
 import type {
   DiscordGateway,
   DiscordGatewayAction,
+  DiscordGatewayEvent,
   DiscordGatewayHandler,
   DiscordGatewayMessage,
+  DiscordGatewayMessageDeleted,
+  DiscordGatewayMessageEdited,
+  DiscordGatewayReaction,
   DiscordGatewaySentMessage,
   DiscordGatewayUser,
 } from "./types.js";
 
 type DiscordRestClient = Readonly<{
-  post(route: string, options: Readonly<{ body: unknown }>): Promise<unknown>;
-  patch(route: string, options: Readonly<{ body: unknown }>): Promise<unknown>;
+  post(route: `/${string}`, options?: RestRequest): Promise<unknown>;
+  patch(route: `/${string}`, options?: RestRequest): Promise<unknown>;
+  delete(route: `/${string}`): Promise<unknown>;
+  put(route: `/${string}`): Promise<unknown>;
 }>;
+
+type RestRequest = Readonly<{
+  body?: unknown;
+  files?: { data: Buffer; name: string }[];
+}>;
+
+const DEFAULT_MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024;
+
+type MessageUpdateListener = (...args: ClientEvents[Events.MessageUpdate]) => void;
+type MessageDeleteListener = (...args: ClientEvents[Events.MessageDelete]) => void;
+type ReactionAddListener = (...args: ClientEvents[Events.MessageReactionAdd]) => void;
+type ReactionRemoveListener = (...args: ClientEvents[Events.MessageReactionRemove]) => void;
 
 export type DiscordJsGatewayOptions = Readonly<{
   token: string;
   messageContentIntent?: boolean;
+  fetch?: typeof globalThis.fetch;
+  maximumAttachmentBytes?: number;
   onError?: (error: unknown) => void | Promise<void>;
 }>;
 
@@ -35,10 +58,16 @@ export class DiscordJsGateway implements DiscordGateway {
   private readonly messageContentIntent: boolean;
   private readonly onError: DiscordJsGatewayOptions["onError"];
   private readonly rest: DiscordRestClient;
+  private readonly fetch: typeof globalThis.fetch;
+  private readonly maximumAttachmentBytes: number;
   private client: Client | undefined;
   private readonly deliveries = new Set<Promise<void>>();
   private messageListener: ((message: Message) => void) | undefined;
   private interactionListener: ((interaction: Interaction) => void) | undefined;
+  private messageUpdateListener: MessageUpdateListener | undefined;
+  private messageDeleteListener: MessageDeleteListener | undefined;
+  private reactionAddListener: ReactionAddListener | undefined;
+  private reactionRemoveListener: ReactionRemoveListener | undefined;
   private errorListener: ((error: Error) => void) | undefined;
 
   constructor(options: DiscordJsGatewayOptions, rest?: DiscordRestClient) {
@@ -48,7 +77,24 @@ export class DiscordJsGateway implements DiscordGateway {
     this.token = options.token;
     this.messageContentIntent = options.messageContentIntent ?? true;
     this.onError = options.onError;
-    this.rest = rest ?? new REST({ version: "10" }).setToken(options.token);
+    if (rest === undefined) {
+      const client = new REST({ version: "10" }).setToken(options.token);
+      this.rest = {
+        post: (route, request) => client.post(route, request),
+        patch: (route, request) => client.patch(route, request),
+        delete: (route) => client.delete(route),
+        put: (route) => client.put(route),
+      };
+    } else {
+      this.rest = rest;
+    }
+    this.fetch = options.fetch ?? globalThis.fetch;
+    this.maximumAttachmentBytes = options.maximumAttachmentBytes ?? DEFAULT_MAX_ATTACHMENT_BYTES;
+    if (typeof this.fetch !== "function")
+      throw new TypeError("A Fetch API implementation is required");
+    if (!Number.isSafeInteger(this.maximumAttachmentBytes) || this.maximumAttachmentBytes <= 0) {
+      throw new TypeError("Discord maximum attachment size must be a positive integer");
+    }
   }
 
   async start(handler: DiscordGatewayHandler): Promise<void> {
@@ -60,9 +106,11 @@ export class DiscordJsGateway implements DiscordGateway {
         GatewayIntentBits.Guilds,
         GatewayIntentBits.GuildMessages,
         GatewayIntentBits.DirectMessages,
+        GatewayIntentBits.GuildMessageReactions,
+        GatewayIntentBits.DirectMessageReactions,
         ...(this.messageContentIntent ? [GatewayIntentBits.MessageContent] : []),
       ],
-      partials: [Partials.Channel],
+      partials: [Partials.Channel, Partials.Message, Partials.Reaction, Partials.User],
     });
     const messageListener = (message: Message) => {
       let delivery: Promise<void>;
@@ -89,23 +137,73 @@ export class DiscordJsGateway implements DiscordGateway {
         .finally(() => this.deliveries.delete(delivery));
       this.deliveries.add(delivery);
     };
+    const deliver = (
+      createEvent: () => DiscordGatewayEvent | undefined | Promise<DiscordGatewayEvent | undefined>,
+    ) => {
+      let delivery: Promise<void>;
+      delivery = Promise.resolve()
+        .then(createEvent)
+        .then(async (event) => {
+          if (event !== undefined) await handler(event);
+        })
+        .catch((error: unknown) => this.reportError(error))
+        .finally(() => this.deliveries.delete(delivery));
+      this.deliveries.add(delivery);
+    };
+    const messageUpdateListener: MessageUpdateListener = (_oldMessage, newMessage) => {
+      deliver(() => gatewayEditedMessageFromDiscord(newMessage, client));
+    };
+    const messageDeleteListener: MessageDeleteListener = (message) => {
+      deliver(() => gatewayDeletedMessageFromDiscord(message, client));
+    };
+    const reactionAddListener: ReactionAddListener = (reaction, user) => {
+      deliver(async () => {
+        const completeReaction = reaction.partial ? await reaction.fetch() : reaction;
+        const completeUser = user.partial ? await client.users.fetch(user.id) : user;
+        return gatewayReactionFromDiscord(completeReaction, completeUser, client, false);
+      });
+    };
+    const reactionRemoveListener: ReactionRemoveListener = (reaction, user) => {
+      deliver(async () => {
+        const completeReaction = reaction.partial ? await reaction.fetch() : reaction;
+        const completeUser = user.partial ? await client.users.fetch(user.id) : user;
+        return gatewayReactionFromDiscord(completeReaction, completeUser, client, true);
+      });
+    };
     const errorListener = (error: Error) => {
       void this.reportError(error);
     };
 
     client.on(Events.MessageCreate, messageListener);
     client.on(Events.InteractionCreate, interactionListener);
+    client.on(Events.MessageUpdate, messageUpdateListener);
+    client.on(Events.MessageDelete, messageDeleteListener);
+    client.on(Events.MessageReactionAdd, reactionAddListener);
+    client.on(Events.MessageReactionRemove, reactionRemoveListener);
     client.on(Events.Error, errorListener);
     this.client = client;
     this.messageListener = messageListener;
     this.interactionListener = interactionListener;
+    this.messageUpdateListener = messageUpdateListener;
+    this.messageDeleteListener = messageDeleteListener;
+    this.reactionAddListener = reactionAddListener;
+    this.reactionRemoveListener = reactionRemoveListener;
     this.errorListener = errorListener;
 
     try {
       await client.login(this.token);
       if (client.user === null) throw new Error("Discord gateway started without a bot user");
     } catch (error) {
-      this.detachClient(client, messageListener, interactionListener, errorListener);
+      this.detachClient(
+        client,
+        messageListener,
+        interactionListener,
+        messageUpdateListener,
+        messageDeleteListener,
+        reactionAddListener,
+        reactionRemoveListener,
+        errorListener,
+      );
       throw error;
     }
   }
@@ -114,16 +212,33 @@ export class DiscordJsGateway implements DiscordGateway {
     const client = this.client;
     const messageListener = this.messageListener;
     const interactionListener = this.interactionListener;
+    const messageUpdateListener = this.messageUpdateListener;
+    const messageDeleteListener = this.messageDeleteListener;
+    const reactionAddListener = this.reactionAddListener;
+    const reactionRemoveListener = this.reactionRemoveListener;
     const errorListener = this.errorListener;
     if (
       client === undefined ||
       messageListener === undefined ||
       interactionListener === undefined ||
+      messageUpdateListener === undefined ||
+      messageDeleteListener === undefined ||
+      reactionAddListener === undefined ||
+      reactionRemoveListener === undefined ||
       errorListener === undefined
     )
       return;
 
-    this.detachClient(client, messageListener, interactionListener, errorListener);
+    this.detachClient(
+      client,
+      messageListener,
+      interactionListener,
+      messageUpdateListener,
+      messageDeleteListener,
+      reactionAddListener,
+      reactionRemoveListener,
+      errorListener,
+    );
     await Promise.all(this.deliveries);
   }
 
@@ -131,8 +246,10 @@ export class DiscordJsGateway implements DiscordGateway {
     channelId: string,
     message: Parameters<DiscordGateway["send"]>[1],
   ): Promise<DiscordGatewaySentMessage> {
+    const files = await discordFiles(message, this.fetch, this.maximumAttachmentBytes);
     const response = await this.rest.post(Routes.channelMessages(channelId), {
       body: messageBody(message),
+      ...(files.length === 0 ? {} : { files }),
     });
     return sentMessage(response);
   }
@@ -142,25 +259,51 @@ export class DiscordJsGateway implements DiscordGateway {
     messageId: string,
     message: Parameters<DiscordGateway["edit"]>[2],
   ): Promise<void> {
+    const files = await discordFiles(message, this.fetch, this.maximumAttachmentBytes);
     await this.rest.patch(Routes.channelMessage(channelId, messageId), {
       body: messageBody(message),
+      ...(files.length === 0 ? {} : { files }),
     });
+  }
+
+  async delete(channelId: string, messageId: string): Promise<void> {
+    await this.rest.delete(Routes.channelMessage(channelId, messageId));
+  }
+
+  async showTyping(channelId: string): Promise<void> {
+    await this.rest.post(Routes.channelTyping(channelId), {});
+  }
+
+  async react(channelId: string, messageId: string, reaction: string): Promise<void> {
+    await this.rest.put(Routes.channelMessageOwnReaction(channelId, messageId, reaction));
   }
 
   private detachClient(
     client: Client,
     messageListener: (message: Message) => void,
     interactionListener: (interaction: Interaction) => void,
+    messageUpdateListener: MessageUpdateListener,
+    messageDeleteListener: MessageDeleteListener,
+    reactionAddListener: ReactionAddListener,
+    reactionRemoveListener: ReactionRemoveListener,
     errorListener: (error: Error) => void,
   ): void {
     client.off(Events.MessageCreate, messageListener);
     client.off(Events.InteractionCreate, interactionListener);
+    client.off(Events.MessageUpdate, messageUpdateListener);
+    client.off(Events.MessageDelete, messageDeleteListener);
+    client.off(Events.MessageReactionAdd, reactionAddListener);
+    client.off(Events.MessageReactionRemove, reactionRemoveListener);
     client.off(Events.Error, errorListener);
     client.destroy();
     if (this.client === client) {
       this.client = undefined;
       this.messageListener = undefined;
       this.interactionListener = undefined;
+      this.messageUpdateListener = undefined;
+      this.messageDeleteListener = undefined;
+      this.reactionAddListener = undefined;
+      this.reactionRemoveListener = undefined;
       this.errorListener = undefined;
     }
   }
@@ -181,15 +324,14 @@ function gatewayMessageFromDiscord(
   const bot = client.user;
   if (bot === null) return undefined;
   const thread = message.channel.isThread();
+  const parentChannelId = message.channel.isThread() ? message.channel.parentId : null;
 
   return {
     type: "message",
     id: message.id,
     channelId: message.channelId,
     ...(message.guildId === null ? {} : { guildId: message.guildId }),
-    ...(thread && message.channel.parentId !== null
-      ? { parentChannelId: message.channel.parentId }
-      : {}),
+    ...(parentChannelId === null ? {} : { parentChannelId }),
     content: message.content,
     attachments: message.attachments.map((attachment) => ({
       id: attachment.id,
@@ -205,6 +347,77 @@ function gatewayMessageFromDiscord(
     thread,
     system: message.system,
     mentionedBot: message.mentions.users.has(bot.id) || message.mentions.repliedUser?.id === bot.id,
+    ...(message.reference?.messageId === undefined
+      ? {}
+      : { replyToMessageId: message.reference.messageId }),
+    ...(message.mentions.repliedUser === null || message.mentions.repliedUser === undefined
+      ? {}
+      : { replyToUser: gatewayUser(message.mentions.repliedUser) }),
+  };
+}
+
+function gatewayEditedMessageFromDiscord(
+  message: Message,
+  client: Client,
+): DiscordGatewayMessageEdited | undefined {
+  const source = gatewayMessageFromDiscord(message, client);
+  if (source === undefined) return undefined;
+  const { type: _type, id: messageId, mentionedBot: _mentionedBot, ...rest } = source;
+  return {
+    ...rest,
+    type: "message-edited",
+    id: `${messageId}:edited:${message.editedTimestamp ?? Date.now()}`,
+    messageId,
+  };
+}
+
+function gatewayDeletedMessageFromDiscord(
+  message: ClientEvents[Events.MessageDelete][0],
+  client: Client,
+): DiscordGatewayMessageDeleted | undefined {
+  const bot = client.user;
+  if (bot === null) return undefined;
+  const thread = message.channel.isThread();
+  const parentChannelId = message.channel.isThread() ? message.channel.parentId : null;
+  return {
+    type: "message-deleted",
+    id: `${message.id}:deleted`,
+    channelId: message.channelId,
+    ...(message.guildId === null ? {} : { guildId: message.guildId }),
+    ...(parentChannelId === null ? {} : { parentChannelId }),
+    messageId: message.id,
+    bot: gatewayUser(bot),
+    direct: message.channel.isDMBased(),
+    thread,
+  };
+}
+
+function gatewayReactionFromDiscord(
+  reaction: MessageReaction,
+  user: User,
+  client: Client,
+  removed: boolean,
+): DiscordGatewayReaction | undefined {
+  const bot = client.user;
+  if (bot === null) return undefined;
+  const message = reaction.message;
+  const thread = message.channel.isThread();
+  const identifier = reaction.emoji.identifier;
+  return {
+    type: "reaction",
+    id: `${message.id}:reaction:${user.id}:${identifier}:${removed ? "removed" : "added"}`,
+    channelId: message.channelId,
+    ...(message.guildId === null ? {} : { guildId: message.guildId }),
+    ...(thread && message.channel.parentId !== null
+      ? { parentChannelId: message.channel.parentId }
+      : {}),
+    messageId: message.id,
+    reaction: identifier,
+    removed,
+    user: gatewayUser(user),
+    bot: gatewayUser(bot),
+    direct: message.channel.isDMBased(),
+    thread,
   };
 }
 
@@ -246,6 +459,9 @@ function messageBody(
   return {
     content: message.text,
     allowed_mentions: { parse: [] },
+    ...(message.replyToMessageId === undefined
+      ? {}
+      : { message_reference: { message_id: message.replyToMessageId } }),
     components:
       message.actions === undefined
         ? []
@@ -261,6 +477,82 @@ function messageBody(
             },
           ],
   };
+}
+
+async function discordFiles(
+  message: Parameters<DiscordGateway["send"]>[1],
+  fetchImplementation: typeof globalThis.fetch,
+  maximumBytes: number,
+): Promise<{ data: Buffer; name: string }[]> {
+  if (message.attachments === undefined) return [];
+  const files: { data: Buffer; name: string }[] = [];
+  let totalBytes = 0;
+  for (const [index, attachment] of message.attachments.entries()) {
+    if (attachment.size !== undefined && attachment.size > maximumBytes) {
+      throw new RangeError(`Discord attachment must not exceed ${maximumBytes} bytes`);
+    }
+    const data =
+      attachment.source.type === "data"
+        ? boundedBase64(attachment.source.data, maximumBytes)
+        : await downloadAttachment(attachment.source.url, fetchImplementation, maximumBytes);
+    totalBytes += data.byteLength;
+    if (totalBytes > maximumBytes) {
+      throw new RangeError(`Discord attachments must not exceed ${maximumBytes} bytes in total`);
+    }
+    files.push({ data, name: attachment.filename ?? `attachment-${index + 1}` });
+  }
+  return files;
+}
+
+function boundedBase64(data: string, maximumBytes: number): Buffer {
+  const buffer = Buffer.from(data, "base64");
+  if (buffer.byteLength > maximumBytes) {
+    throw new RangeError(`Discord attachment must not exceed ${maximumBytes} bytes`);
+  }
+  return buffer;
+}
+
+async function downloadAttachment(
+  url: string,
+  fetchImplementation: typeof globalThis.fetch,
+  maximumBytes: number,
+): Promise<Buffer> {
+  let response: Response;
+  try {
+    response = await fetchImplementation(url, { redirect: "error" });
+  } catch {
+    // Fetch errors may contain a signed attachment URL.
+    throw new Error("Discord attachment download failed");
+  }
+  if (!response.ok)
+    throw new Error(`Discord attachment download failed with HTTP ${response.status}`);
+  const contentLength = response.headers.get("content-length");
+  if (
+    contentLength !== null &&
+    /^\d+$/.test(contentLength) &&
+    Number(contentLength) > maximumBytes
+  ) {
+    throw new RangeError(`Discord attachment must not exceed ${maximumBytes} bytes`);
+  }
+  if (response.body === null) return Buffer.alloc(0);
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let totalBytes = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    if (totalBytes + value.byteLength > maximumBytes) {
+      try {
+        await reader.cancel();
+      } catch {
+        // Preserve the size violation if stream cancellation fails.
+      }
+      throw new RangeError(`Discord attachment must not exceed ${maximumBytes} bytes`);
+    }
+    chunks.push(value);
+    totalBytes += value.byteLength;
+  }
+  return Buffer.concat(chunks, totalBytes);
 }
 
 function sentMessage(value: unknown): DiscordGatewaySentMessage {

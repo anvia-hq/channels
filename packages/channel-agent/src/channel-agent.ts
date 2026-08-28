@@ -123,6 +123,7 @@ export class ChannelAgentService<RawEvent = unknown, Output = string> {
       await this.queue.run(channelConversationKey(event), () => this.processAction(event, signal));
       return;
     }
+    if (event.type !== "message") return;
 
     let shouldHandle: boolean;
     try {
@@ -268,10 +269,19 @@ export class ChannelAgentService<RawEvent = unknown, Output = string> {
   ): Promise<void> {
     const message = typeof response === "string" ? { text: response } : response;
     const text = message.text;
-    if (text.length === 0) return;
+    if (text.length === 0 && message.attachments === undefined) return;
     const parts = this.messageParts(message);
     if (provisional === undefined) {
       await sendChannelMessage(this.options.channel, address, message);
+      return;
+    }
+    if (message.attachments !== undefined) {
+      const deleteMessage = this.options.channel.delete;
+      if (deleteMessage === undefined) {
+        throw new Error("Attachment delivery with a placeholder requires channel deletion support");
+      }
+      await sendChannelMessage(this.options.channel, address, message);
+      await deleteMessage.call(this.options.channel, provisional);
       return;
     }
     const first = parts[0];
@@ -285,7 +295,7 @@ export class ChannelAgentService<RawEvent = unknown, Output = string> {
 
   private async completeOutcome(
     outcome: AgentOutcome<Output>,
-    event: ChannelEvent<RawEvent>,
+    event: ChannelMessageEvent<RawEvent> | ChannelActionEvent<RawEvent>,
     provisional: SentChannelMessage | undefined,
     signal: AbortSignal,
     deliveredText?: string,
@@ -441,8 +451,21 @@ export class ChannelAgentService<RawEvent = unknown, Output = string> {
     address: ChannelAddress,
     event: ChannelEvent<RawEvent>,
   ): Promise<SentChannelMessage | undefined | null> {
+    if (this.options.channel.capabilities?.typing === true) {
+      try {
+        await this.options.channel.showTyping?.(address);
+      } catch (error) {
+        await this.reportError(error, { stage: "delivery", event });
+      }
+    }
     const placeholder = this.options.streaming.placeholder;
     if (placeholder === false) return undefined;
+    if (
+      this.options.channel.capabilities?.outboundAttachments !== undefined &&
+      this.options.channel.delete === undefined
+    ) {
+      return undefined;
+    }
     try {
       const first = this.messageParts({ text: placeholder })[0];
       if (first === undefined)
@@ -586,7 +609,9 @@ function defaultRenderOutcome<Output>(outcome: AgentOutcome<Output>): string {
 
 function responseMessage(value: string | ChannelMessage, fallback: string): ChannelMessage {
   const message = typeof value === "string" ? { text: value } : value;
-  return message.text.length === 0 ? { text: fallback } : message;
+  return message.text.length === 0 && message.attachments === undefined
+    ? { text: fallback }
+    : message;
 }
 
 function eventAddress(event: ChannelEvent): ChannelAddress {

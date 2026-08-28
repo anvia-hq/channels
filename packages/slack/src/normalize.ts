@@ -1,11 +1,29 @@
 import type {
   ChannelActionEvent,
   ChannelConversationKind,
+  ChannelEvent,
   ChannelMessageEvent,
 } from "@anvia/channel";
 import { isChannelActionId } from "@anvia/channel";
 import { isSlackId, isSlackTimestamp } from "./identifiers.js";
-import type { SlackSocketAction, SlackSocketMessage } from "./types.js";
+import type {
+  SlackSocketAction,
+  SlackSocketEvent,
+  SlackSocketMessage,
+  SlackSocketMessageDeleted,
+  SlackSocketMessageEdited,
+  SlackSocketReaction,
+} from "./types.js";
+
+export function normalizeSlackEvent(
+  event: SlackSocketEvent,
+): ChannelEvent<SlackSocketEvent> | undefined {
+  if (event.type === "action") return normalizeSlackAction(event);
+  if (event.type === "message-edited") return normalizeSlackEdit(event);
+  if (event.type === "message-deleted") return normalizeSlackDelete(event);
+  if (event.type === "reaction") return normalizeSlackReaction(event);
+  return normalizeSlackMessage(event);
+}
 
 export function normalizeSlackMessage(
   message: SlackSocketMessage,
@@ -39,10 +57,121 @@ export function normalizeSlackMessage(
       filename: file.name,
       ...(file.size === undefined ? {} : { size: file.size }),
     })),
+    ...(message.threadTimestamp === undefined || message.threadTimestamp === message.timestamp
+      ? {}
+      : { replyTo: { messageId: message.threadTimestamp } }),
     mentionedBot:
       message.type === "app_mention" || message.text.includes(`<@${message.botUserId}>`),
     raw: message,
   };
+}
+
+function normalizeSlackEdit(
+  event: SlackSocketMessageEdited,
+): ChannelEvent<SlackSocketMessageEdited> | undefined {
+  if (
+    !validLifecycleBase(event) ||
+    !isSlackId(event.senderId) ||
+    typeof event.text !== "string" ||
+    typeof event.senderBot !== "boolean" ||
+    (event.senderDisplayName !== undefined && typeof event.senderDisplayName !== "string") ||
+    !Array.isArray(event.files) ||
+    !event.files.every(validFile)
+  ) {
+    return undefined;
+  }
+  return {
+    type: "message-edited",
+    id: event.eventId,
+    platform: "slack",
+    accountId: event.teamId,
+    conversation: eventConversation(event),
+    sender: {
+      id: event.senderId,
+      ...(event.senderDisplayName === undefined ? {} : { displayName: event.senderDisplayName }),
+      bot: event.senderBot,
+    },
+    messageId: event.messageTimestamp,
+    text: event.text,
+    attachments: event.files.map(normalizedFile),
+    raw: event,
+  };
+}
+
+function normalizeSlackDelete(
+  event: SlackSocketMessageDeleted,
+): ChannelEvent<SlackSocketMessageDeleted> | undefined {
+  if (!validLifecycleBase(event)) return undefined;
+  return {
+    type: "message-deleted",
+    id: event.eventId,
+    platform: "slack",
+    accountId: event.teamId,
+    conversation: eventConversation(event),
+    messageId: event.messageTimestamp,
+    raw: event,
+  };
+}
+
+function normalizeSlackReaction(
+  event: SlackSocketReaction,
+): ChannelEvent<SlackSocketReaction> | undefined {
+  if (
+    !validLifecycleBase(event) ||
+    !isSlackId(event.senderId) ||
+    typeof event.reaction !== "string" ||
+    event.reaction.length === 0 ||
+    typeof event.removed !== "boolean"
+  ) {
+    return undefined;
+  }
+  return {
+    type: "reaction",
+    id: event.eventId,
+    platform: "slack",
+    accountId: event.teamId,
+    conversation: eventConversation(event),
+    sender: { id: event.senderId, bot: event.senderId === event.botUserId },
+    messageId: event.messageTimestamp,
+    reaction: event.reaction,
+    removed: event.removed,
+    raw: event,
+  };
+}
+
+function validLifecycleBase(
+  event: SlackSocketMessageEdited | SlackSocketMessageDeleted | SlackSocketReaction,
+): boolean {
+  return (
+    typeof event.eventId === "string" &&
+    event.eventId.length > 0 &&
+    isSlackId(event.teamId) &&
+    isSlackId(event.channelId) &&
+    ["channel", "group", "im", "mpim", "app_home"].includes(event.channelType) &&
+    isSlackTimestamp(event.messageTimestamp) &&
+    (event.threadTimestamp === undefined || isSlackTimestamp(event.threadTimestamp)) &&
+    isSlackId(event.botUserId)
+  );
+}
+
+function eventConversation(
+  event: SlackSocketMessageEdited | SlackSocketMessageDeleted | SlackSocketReaction,
+) {
+  return {
+    id: event.channelId,
+    kind: conversationKind(event.channelType),
+    ...(event.threadTimestamp === undefined ? {} : { threadId: event.threadTimestamp }),
+  } as const;
+}
+
+function normalizedFile(file: SlackSocketMessage["files"][number]) {
+  return {
+    id: file.id,
+    type: attachmentType(file.mediaType),
+    mediaType: file.mediaType,
+    filename: file.name,
+    ...(file.size === undefined ? {} : { size: file.size }),
+  } as const;
 }
 
 export function normalizeSlackAction(

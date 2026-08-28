@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { normalizeSlackMessage } from "../src/index.js";
+import { normalizeSlackEvent, normalizeSlackMessage } from "../src/index.js";
 import { slackMessage } from "./helpers.js";
 
 describe("normalizeSlackMessage", () => {
@@ -71,6 +71,28 @@ describe("normalizeSlackMessage", () => {
       },
       mentionedBot: true,
     });
+  });
+
+  it("preserves reply references and normalizes lifecycle events", () => {
+    expect(
+      normalizeSlackMessage(
+        slackMessage({
+          timestamp: "1700000001.000002",
+          threadTimestamp: "1700000000.000001",
+        }),
+      ),
+    ).toMatchObject({ replyTo: { messageId: "1700000000.000001" } });
+    expect(
+      normalizeSlackEvent({
+        type: "message-deleted",
+        eventId: "Ev2",
+        teamId: "T1",
+        channelId: "C1",
+        channelType: "channel",
+        messageTimestamp: "1700000001.000002",
+        botUserId: "U2",
+      }),
+    ).toMatchObject({ type: "message-deleted", messageId: "1700000001.000002" });
   });
 
   it("ignores empty and malformed messages", () => {
