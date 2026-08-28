@@ -110,12 +110,19 @@ Incoming threads use the parent channel as `conversation.id` and the Discord thr
 ```ts
 if (event.type !== "message") return;
 
-const address = {
+const address: {
+  platform: string;
+  accountId?: string;
+  conversationId: string;
+  threadId?: string;
+} = {
   platform: event.platform,
   conversationId: event.conversation.id,
-  ...(event.accountId === undefined ? {} : { accountId: event.accountId }),
-  ...(event.conversation.threadId === undefined ? {} : { threadId: event.conversation.threadId }),
 };
+if (event.accountId !== undefined) address.accountId = event.accountId;
+if (event.conversation.threadId !== undefined) {
+  address.threadId = event.conversation.threadId;
+}
 
 await channel.send(address, {
   text: "Replying inside the same thread.",

@@ -66,12 +66,13 @@ export function createTelegramBotApiClient(options: TelegramBotApiClientOptions)
   ): Promise<unknown> => {
     let response: Response;
     try {
-      response = await fetchImplementation(`${baseUrl}/bot${token}/${method}`, {
+      const request: RequestInit = {
         method: "POST",
-        ...(contentType === undefined ? {} : { headers: { "content-type": contentType } }),
         body,
-        ...(signal === undefined ? {} : { signal }),
-      });
+      };
+      if (contentType !== undefined) request.headers = { "content-type": contentType };
+      if (signal !== undefined) request.signal = signal;
+      response = await fetchImplementation(`${baseUrl}/bot${token}/${method}`, request);
     } catch (error) {
       if (signal?.aborted === true) throw error;
       // Fetch errors can contain the request URL, which embeds the bot token.
@@ -94,13 +95,15 @@ export function createTelegramBotApiClient(options: TelegramBotApiClientOptions)
     if (!envelope.ok) {
       const errorCode = optionalInteger(envelope.error_code);
       const retryAfterSeconds = responseRetryAfter(envelope.parameters);
+      const errorOptions: { errorCode?: number; retryAfterSeconds?: number } = {};
+      if (errorCode !== undefined) errorOptions.errorCode = errorCode;
+      if (retryAfterSeconds !== undefined) {
+        errorOptions.retryAfterSeconds = retryAfterSeconds;
+      }
       throw new TelegramApiError(
         method,
         optionalString(envelope.description) ?? `HTTP ${response.status}`,
-        {
-          ...(errorCode === undefined ? {} : { errorCode }),
-          ...(retryAfterSeconds === undefined ? {} : { retryAfterSeconds }),
-        },
+        errorOptions,
       );
     }
     if (!("result" in envelope)) {
@@ -139,19 +142,15 @@ export function createTelegramBotApiClient(options: TelegramBotApiClientOptions)
       }
       const method = attachmentMethod(sendRequest.attachment.type);
       const field = attachmentField(sendRequest.attachment.type);
-      const common = {
-        chat_id: sendRequest.chat_id,
-        ...(sendRequest.message_thread_id === undefined
-          ? {}
-          : { message_thread_id: sendRequest.message_thread_id }),
-        ...(sendRequest.caption === undefined ? {} : { caption: sendRequest.caption }),
-        ...(sendRequest.reply_parameters === undefined
-          ? {}
-          : { reply_parameters: sendRequest.reply_parameters }),
-        ...(sendRequest.reply_markup === undefined
-          ? {}
-          : { reply_markup: sendRequest.reply_markup }),
-      };
+      const common: Record<string, unknown> = { chat_id: sendRequest.chat_id };
+      if (sendRequest.message_thread_id !== undefined) {
+        common.message_thread_id = sendRequest.message_thread_id;
+      }
+      if (sendRequest.caption !== undefined) common.caption = sendRequest.caption;
+      if (sendRequest.reply_parameters !== undefined) {
+        common.reply_parameters = sendRequest.reply_parameters;
+      }
+      if (sendRequest.reply_markup !== undefined) common.reply_markup = sendRequest.reply_markup;
       let result: unknown;
       if (sendRequest.attachment.source.type === "url") {
         result = await call(
@@ -477,12 +476,18 @@ function telegramPhotos(value: unknown, label: string): readonly TelegramPhotoSi
     const raw = object(item, `${label}[${index}]`);
     const itemLabel = `${label}[${index}]`;
     const fileSize = optionalNonnegativeInteger(raw.file_size, `${itemLabel}.file_size`);
-    return {
+    const photo: {
+      file_id: string;
+      width: number;
+      height: number;
+      file_size?: number;
+    } = {
       file_id: nonemptyString(raw.file_id, `${itemLabel}.file_id`),
       width: positiveInteger(raw.width, `${itemLabel}.width`),
       height: positiveInteger(raw.height, `${itemLabel}.height`),
-      ...(fileSize === undefined ? {} : { file_size: fileSize }),
     };
+    if (fileSize !== undefined) photo.file_size = fileSize;
+    return photo;
   });
 }
 
@@ -491,12 +496,18 @@ function telegramMediaFile(value: unknown, label: string): TelegramMediaFile {
   const fileName = optionalString(raw.file_name);
   const mediaType = optionalString(raw.mime_type);
   const fileSize = optionalNonnegativeInteger(raw.file_size, `${label}.file_size`);
-  return {
+  const file: {
+    file_id: string;
+    file_name?: string;
+    mime_type?: string;
+    file_size?: number;
+  } = {
     file_id: nonemptyString(raw.file_id, `${label}.file_id`),
-    ...(fileName === undefined ? {} : { file_name: fileName }),
-    ...(mediaType === undefined ? {} : { mime_type: mediaType }),
-    ...(fileSize === undefined ? {} : { file_size: fileSize }),
   };
+  if (fileName !== undefined) file.file_name = fileName;
+  if (mediaType !== undefined) file.mime_type = mediaType;
+  if (fileSize !== undefined) file.file_size = fileSize;
+  return file;
 }
 
 function telegramUser(value: unknown, label: string): TelegramUser {

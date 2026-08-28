@@ -19,13 +19,23 @@ import {
   parseTelegramUpdate,
 } from "./bot-api-client.js";
 import { normalizeTelegramUpdate } from "./normalize.js";
-import type { TelegramBotApi, TelegramUpdate, TelegramUser } from "./types.js";
+import type {
+  TelegramBotApi,
+  TelegramGetUpdatesRequest,
+  TelegramSendAttachmentRequest,
+  TelegramSendChatActionRequest,
+  TelegramSendMessageRequest,
+  TelegramUpdate,
+  TelegramUser,
+} from "./types.js";
 
 const DEFAULT_POLL_TIMEOUT_SECONDS = 30;
 const DEFAULT_RETRY_DELAY_MS = 1_000;
 const DEFAULT_POLL_LIMIT = 100;
 const MAX_MESSAGE_LENGTH = 4_096;
 const MAX_REMEMBERED_UPDATES = 1_000;
+
+type Mutable<T> = { -readonly [Key in keyof T]: T[Key] };
 
 export type TelegramPollingOptions = Readonly<{
   timeoutSeconds?: number;
@@ -98,16 +108,22 @@ export class TelegramChannel implements Channel<TelegramUpdate> {
     if (options.webhook !== undefined && options.polling !== undefined) {
       throw new TypeError("Telegram polling and webhook options are mutually exclusive");
     }
-    this.api =
-      options.api ??
-      createTelegramBotApiClient({
-        token: options.token,
-        ...(options.baseUrl === undefined ? {} : { baseUrl: options.baseUrl }),
-        ...(options.fetch === undefined ? {} : { fetch: options.fetch }),
-        ...(options.maximumAttachmentBytes === undefined
-          ? {}
-          : { maximumAttachmentBytes: options.maximumAttachmentBytes }),
-      });
+    if (options.api !== undefined && options.api !== null) {
+      this.api = options.api;
+    } else {
+      const clientOptions: {
+        token: string;
+        baseUrl?: string;
+        fetch?: typeof globalThis.fetch;
+        maximumAttachmentBytes?: number;
+      } = { token: options.token };
+      if (options.baseUrl !== undefined) clientOptions.baseUrl = options.baseUrl;
+      if (options.fetch !== undefined) clientOptions.fetch = options.fetch;
+      if (options.maximumAttachmentBytes !== undefined) {
+        clientOptions.maximumAttachmentBytes = options.maximumAttachmentBytes;
+      }
+      this.api = createTelegramBotApiClient(clientOptions);
+    }
     this.polling = resolvePollingOptions(options.polling);
     this.webhook = resolveWebhookOptions(options.webhook);
     this.onError = options.onError;
@@ -234,41 +250,50 @@ export class TelegramChannel implements Channel<TelegramUpdate> {
     );
     let sent: Awaited<ReturnType<TelegramBotApi["sendMessage"]>> | undefined;
     if (message.text.length > 0) {
-      sent = await this.api.sendMessage({
+      const request: Mutable<TelegramSendMessageRequest> = {
         chat_id: target,
         text: message.text,
-        ...(threadId === undefined ? {} : { message_thread_id: threadId }),
-        ...(replyMessageId === undefined
-          ? {}
-          : { reply_parameters: { message_id: replyMessageId } }),
-        ...telegramReplyMarkup(message),
-      });
+      };
+      if (threadId !== undefined) request.message_thread_id = threadId;
+      if (replyMessageId !== undefined) {
+        request.reply_parameters = { message_id: replyMessageId };
+      }
+      const replyMarkup = telegramReplyMarkup(message);
+      if ("reply_markup" in replyMarkup) request.reply_markup = replyMarkup.reply_markup;
+      sent = await this.api.sendMessage(request);
     }
     for (const [index, attachment] of (message.attachments ?? []).entries()) {
-      const mediaMessage = await this.api.sendAttachment({
+      const request: Mutable<TelegramSendAttachmentRequest> = {
         chat_id: target,
-        ...(threadId === undefined ? {} : { message_thread_id: threadId }),
         attachment,
-        ...(sent !== undefined || replyMessageId === undefined
-          ? {}
-          : { reply_parameters: { message_id: replyMessageId } }),
-        ...(sent === undefined && index === 0 ? telegramReplyMarkup(message) : {}),
-      });
+      };
+      if (threadId !== undefined) request.message_thread_id = threadId;
+      if (sent === undefined && replyMessageId !== undefined) {
+        request.reply_parameters = { message_id: replyMessageId };
+      }
+      if (sent === undefined && index === 0) {
+        const replyMarkup = telegramReplyMarkup(message);
+        if ("reply_markup" in replyMarkup) request.reply_markup = replyMarkup.reply_markup;
+      }
+      const mediaMessage = await this.api.sendAttachment(request);
       sent ??= mediaMessage;
     }
     if (sent === undefined) throw new Error("Telegram message did not produce a sent message");
+    const sentAddress: {
+      platform: string;
+      accountId?: string;
+      conversationId: string;
+      threadId?: string;
+    } = {
+      platform: this.platform,
+      conversationId: String(sent.chat.id),
+    };
+    if (address.accountId !== undefined) sentAddress.accountId = address.accountId;
+    const sentThreadId = sent.message_thread_id ?? threadId;
+    if (sentThreadId !== undefined) sentAddress.threadId = String(sentThreadId);
     return {
       id: String(sent.message_id),
-      address: {
-        platform: this.platform,
-        ...(address.accountId === undefined ? {} : { accountId: address.accountId }),
-        conversationId: String(sent.chat.id),
-        ...(sent.message_thread_id === undefined
-          ? threadId === undefined
-            ? {}
-            : { threadId: String(threadId) }
-          : { threadId: String(sent.message_thread_id) }),
-      },
+      address: sentAddress,
     };
   }
 
@@ -297,11 +322,12 @@ export class TelegramChannel implements Channel<TelegramUpdate> {
   async showTyping(address: ChannelAddress): Promise<void> {
     validateAddress(address);
     const threadId = optionalPositiveInteger(address.threadId, "Telegram thread ID");
-    await this.api.sendChatAction({
+    const request: Mutable<TelegramSendChatActionRequest> = {
       chat_id: chatId(address.conversationId),
-      ...(threadId === undefined ? {} : { message_thread_id: threadId }),
       action: "typing",
-    });
+    };
+    if (threadId !== undefined) request.message_thread_id = threadId;
+    await this.api.sendChatAction(request);
   }
 
   async react(sent: SentChannelMessage, reaction: string): Promise<void> {
@@ -327,15 +353,13 @@ export class TelegramChannel implements Channel<TelegramUpdate> {
     while (!signal.aborted) {
       let updates: readonly TelegramUpdate[];
       try {
-        updates = await this.api.getUpdates(
-          {
-            ...(offset === undefined ? {} : { offset }),
-            limit: this.polling.limit,
-            timeout: this.polling.timeoutSeconds,
-            allowed_updates: ["message", "edited_message", "message_reaction", "callback_query"],
-          },
-          signal,
-        );
+        const request: Mutable<TelegramGetUpdatesRequest> = {
+          limit: this.polling.limit,
+          timeout: this.polling.timeoutSeconds,
+          allowed_updates: ["message", "edited_message", "message_reaction", "callback_query"],
+        };
+        if (offset !== undefined) request.offset = offset;
+        updates = await this.api.getUpdates(request, signal);
       } catch (error) {
         if (signal.aborted) break;
         await this.reportError(error, { operation: "poll" });

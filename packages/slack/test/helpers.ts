@@ -2,6 +2,7 @@ import { vi } from "vitest";
 import type {
   SlackSocketEvent,
   SlackSocketMessage,
+  SlackSentMessage,
   SlackTransport,
   SlackTransportHandler,
 } from "../src/index.js";
@@ -24,11 +25,14 @@ export function fakeTransport(): FakeSlackTransport {
     handler = nextHandler;
   });
   const stop = vi.fn<SlackTransport["stop"]>(async () => undefined);
-  const send = vi.fn<SlackTransport["send"]>(async (channelId, threadTimestamp) => ({
-    channelId,
-    timestamp: "1700000001.000002",
-    ...(threadTimestamp === undefined ? {} : { threadTimestamp }),
-  }));
+  const send = vi.fn<SlackTransport["send"]>(async (channelId, threadTimestamp) => {
+    const sent: { -readonly [Key in keyof SlackSentMessage]: SlackSentMessage[Key] } = {
+      channelId,
+      timestamp: "1700000001.000002",
+    };
+    if (threadTimestamp !== undefined) sent.threadTimestamp = threadTimestamp;
+    return sent;
+  });
   const edit = vi.fn<SlackTransport["edit"]>(async () => undefined);
   const deleteMessage = vi.fn<SlackTransport["delete"]>(async () => undefined);
   const react = vi.fn<SlackTransport["react"]>(async () => undefined);

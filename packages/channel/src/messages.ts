@@ -42,18 +42,23 @@ export function splitChannelMessage(
     message.text.length === 0 && message.attachments !== undefined
       ? [""]
       : splitChannelText(message.text, maximumLength);
-  return textParts.map((text, index) => ({
-    text,
-    ...(message.replyToMessageId !== undefined
-      ? { replyToMessageId: message.replyToMessageId }
-      : {}),
-    ...(index === textParts.length - 1
-      ? {
-          ...(message.actions === undefined ? {} : { actions: message.actions }),
-          ...(message.attachments === undefined ? {} : { attachments: message.attachments }),
-        }
-      : {}),
-  }));
+  return textParts.map((text, index) => {
+    const part: {
+      text: string;
+      replyToMessageId?: string;
+      actions?: NonNullable<ChannelMessage["actions"]>;
+      attachments?: NonNullable<ChannelMessage["attachments"]>;
+    } = { text };
+
+    if (message.replyToMessageId !== undefined) {
+      part.replyToMessageId = message.replyToMessageId;
+    }
+    if (index === textParts.length - 1) {
+      if (message.actions !== undefined) part.actions = message.actions;
+      if (message.attachments !== undefined) part.attachments = message.attachments;
+    }
+    return part;
+  });
 }
 
 export function validateChannelAttachments(attachments: readonly unknown[] | undefined): void {

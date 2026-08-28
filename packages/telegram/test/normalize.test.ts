@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { normalizeTelegramUpdate } from "../src/index.js";
-import type { TelegramUpdate, TelegramUser } from "../src/index.js";
+import type { TelegramChat, TelegramUpdate, TelegramUser } from "../src/index.js";
 
 const bot: TelegramUser = {
   id: 42,
@@ -211,31 +211,39 @@ type MessageUpdateOptions = Readonly<{
 }>;
 
 function messageUpdate(options: MessageUpdateOptions): TelegramUpdate {
+  const message: {
+    message_id: number;
+    message_thread_id?: number;
+    from: TelegramUser;
+    chat: TelegramChat;
+    text?: string;
+    photo?: NonNullable<NonNullable<TelegramUpdate["message"]>["photo"]>;
+    entities?: NonNullable<NonNullable<TelegramUpdate["message"]>["entities"]>;
+    reply_to_message?: NonNullable<NonNullable<TelegramUpdate["message"]>["reply_to_message"]>;
+  } = {
+    message_id: options.updateId,
+    from: {
+      id: 7,
+      is_bot: false,
+      first_name: "Indra",
+      last_name: "Zulfi",
+    },
+    chat: { id: options.chatId, type: options.chatType },
+  };
+  if (options.threadId !== undefined) message.message_thread_id = options.threadId;
+  if (options.text !== undefined) message.text = options.text;
+  if (options.photo !== undefined) message.photo = options.photo;
+  if (options.entities !== undefined) message.entities = options.entities;
+  if (options.replyToBot) {
+    message.reply_to_message = {
+      message_id: 99,
+      from: bot,
+      chat: { id: options.chatId, type: options.chatType },
+      text: "previous",
+    };
+  }
   return {
     update_id: options.updateId,
-    message: {
-      message_id: options.updateId,
-      ...(options.threadId === undefined ? {} : { message_thread_id: options.threadId }),
-      from: {
-        id: 7,
-        is_bot: false,
-        first_name: "Indra",
-        last_name: "Zulfi",
-      },
-      chat: { id: options.chatId, type: options.chatType },
-      ...(options.text === undefined ? {} : { text: options.text }),
-      ...(options.photo === undefined ? {} : { photo: options.photo }),
-      ...(options.entities === undefined ? {} : { entities: options.entities }),
-      ...(options.replyToBot
-        ? {
-            reply_to_message: {
-              message_id: 99,
-              from: bot,
-              chat: { id: options.chatId, type: options.chatType },
-              text: "previous",
-            },
-          }
-        : {}),
-    },
+    message,
   };
 }

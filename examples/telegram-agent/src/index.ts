@@ -33,10 +33,12 @@ const memoryClient = new SqliteMemoryClient({ path: memoryPath });
 const memoryStore = memoryClient.memoryStore();
 await memoryStore.ensure();
 
-const openAi = new OpenAIClient({
-  apiKey: openAiApiKey,
-  ...(openAiBaseUrl ? { baseUrl: openAiBaseUrl } : {}),
-});
+let openAi: OpenAIClient;
+if (openAiBaseUrl === undefined) {
+  openAi = new OpenAIClient({ apiKey: openAiApiKey });
+} else {
+  openAi = new OpenAIClient({ apiKey: openAiApiKey, baseUrl: openAiBaseUrl });
+}
 
 const agent = new Agent({
   id: "telegram-assistant",

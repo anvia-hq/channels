@@ -204,11 +204,15 @@ export class ChannelAgentService<RawEvent = unknown, Output = string> {
     let outcome: AgentOutcome<Output>;
     let deliveredText: string | undefined;
     try {
-      const input: ChannelAgentRunInput = {
+      const input: {
+        prompt: AgentPrompt;
+        session?: MemoryScope;
+        abortSignal: AbortSignal;
+      } = {
         prompt,
-        ...(session === undefined ? {} : { session }),
         abortSignal: signal,
       };
+      if (session !== undefined) input.session = session;
       if (this.options.streaming.enabled) {
         const streamed = await this.streamOutcome(input, event, provisional);
         outcome = streamed.outcome;
@@ -306,13 +310,13 @@ export class ChannelAgentService<RawEvent = unknown, Output = string> {
         if (this.options.agent.resume === undefined) {
           throw new TypeError("Channel agent executor cannot resume interactions");
         }
-        const pending = {
+        let pending: PendingChannelAgentInteraction = {
           continuation: outcome.continuation,
           interaction: outcome.interaction,
-          ...(this.options.channel.capabilities?.actions === true
-            ? { actionToken: randomUUID().replaceAll("-", "") }
-            : {}),
         };
+        if (this.options.channel.capabilities?.actions === true) {
+          pending = { ...pending, actionToken: randomUUID().replaceAll("-", "") };
+        }
         await this.options.interactions.store.set(channelInteractionKey(event), pending);
         const rendered = responseMessage(
           await this.options.interactions.render(pending, event),
@@ -548,8 +552,11 @@ function resolveOptions<RawEvent, Output>(
         if (multimodal === false && event.attachments.length > 0) {
           throw new TypeError("Channel agent multimodal prompts are disabled");
         }
+        if (multimodal === false) {
+          return channelMessagePrompt(context.channel, event, { signal: context.abortSignal });
+        }
         return channelMessagePrompt(context.channel, event, {
-          ...(multimodal === false ? {} : multimodal),
+          ...multimodal,
           signal: context.abortSignal,
         });
       }),
@@ -615,10 +622,18 @@ function responseMessage(value: string | ChannelMessage, fallback: string): Chan
 }
 
 function eventAddress(event: ChannelEvent): ChannelAddress {
-  return {
+  const address: {
+    platform: string;
+    accountId?: string;
+    conversationId: string;
+    threadId?: string;
+  } = {
     platform: event.platform,
-    ...(event.accountId === undefined ? {} : { accountId: event.accountId }),
     conversationId: event.conversation.id,
-    ...(event.conversation.threadId === undefined ? {} : { threadId: event.conversation.threadId }),
   };
+  if (event.accountId !== undefined) address.accountId = event.accountId;
+  if (event.conversation.threadId !== undefined) {
+    address.threadId = event.conversation.threadId;
+  }
+  return address;
 }

@@ -94,13 +94,14 @@ function attachmentEvent(count: number): ChannelMessageEvent {
 }
 
 function channelWith(loadAttachment?: NonNullable<Channel["loadAttachment"]>): Channel {
-  return {
+  const channel: Channel = {
     platform: "test",
     splitMessage: (message) => [message],
-    ...(loadAttachment === undefined ? {} : { loadAttachment }),
     start: async () => undefined,
     stop: async () => undefined,
     send: async (address) => ({ id: "1", address }),
     edit: async () => undefined,
   };
+  if (loadAttachment !== undefined) channel.loadAttachment = loadAttachment;
+  return channel;
 }

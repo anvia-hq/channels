@@ -68,17 +68,27 @@ export class SlackChannel implements Channel<SlackSocketEvent> {
 
   constructor(options: SlackChannelOptions) {
     this.onError = options.onError;
-    this.transport =
-      options.transport ??
-      new SlackSocketTransport({
-        appToken: options.appToken,
-        botToken: options.botToken,
-        ...(options.fetch === undefined ? {} : { fetch: options.fetch }),
-        ...(options.maximumAttachmentBytes === undefined
-          ? {}
-          : { maximumAttachmentBytes: options.maximumAttachmentBytes }),
-        onError: (error) => this.reportError(error, { operation: "socket" }),
-      });
+    if (options.transport !== undefined && options.transport !== null) {
+      this.transport = options.transport;
+      return;
+    }
+
+    const transportOptions: {
+      appToken: string;
+      botToken: string;
+      fetch?: typeof globalThis.fetch;
+      maximumAttachmentBytes?: number;
+      onError: (error: unknown) => Promise<void>;
+    } = {
+      appToken: options.appToken,
+      botToken: options.botToken,
+      onError: (error) => this.reportError(error, { operation: "socket" }),
+    };
+    if (options.fetch !== undefined) transportOptions.fetch = options.fetch;
+    if (options.maximumAttachmentBytes !== undefined) {
+      transportOptions.maximumAttachmentBytes = options.maximumAttachmentBytes;
+    }
+    this.transport = new SlackSocketTransport(transportOptions);
   }
 
   splitMessage(message: ChannelMessage): readonly ChannelMessage[] {
@@ -135,14 +145,21 @@ export class SlackChannel implements Channel<SlackSocketEvent> {
       message,
     );
 
+    const sentAddress: {
+      platform: string;
+      accountId?: string;
+      conversationId: string;
+      threadId?: string;
+    } = {
+      platform: this.platform,
+      conversationId: sent.channelId,
+    };
+    if (address.accountId !== undefined) sentAddress.accountId = address.accountId;
+    if (sent.threadTimestamp !== undefined) sentAddress.threadId = sent.threadTimestamp;
+
     return {
       id: sent.timestamp,
-      address: {
-        platform: this.platform,
-        ...(address.accountId === undefined ? {} : { accountId: address.accountId }),
-        conversationId: sent.channelId,
-        ...(sent.threadTimestamp === undefined ? {} : { threadId: sent.threadTimestamp }),
-      },
+      address: sentAddress,
     };
   }
 

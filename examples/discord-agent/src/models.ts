@@ -3,10 +3,12 @@ import { OpenAIClient } from "@anvia/openai";
 import type { DiscordAgentConfig } from "./types.js";
 
 export function createModel(config: DiscordAgentConfig): CompletionModel {
-  const openAi = new OpenAIClient({
-    apiKey: config.openAiApiKey,
-    ...(config.openAiBaseUrl === undefined ? {} : { baseUrl: config.openAiBaseUrl }),
-  });
+  let openAi: OpenAIClient;
+  if (config.openAiBaseUrl === undefined) {
+    openAi = new OpenAIClient({ apiKey: config.openAiApiKey });
+  } else {
+    openAi = new OpenAIClient({ apiKey: config.openAiApiKey, baseUrl: config.openAiBaseUrl });
+  }
 
   return openAi.completionModel({
     modelId: config.modelId,

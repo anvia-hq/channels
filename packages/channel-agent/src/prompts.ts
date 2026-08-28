@@ -48,12 +48,18 @@ export async function channelMessagePrompt<RawEvent>(
       });
       continue;
     }
-    content.push({
+    const file: {
+      type: "file";
+      data: ChannelAttachmentData;
+      mediaType: string;
+      filename?: string;
+    } = {
       type: "file",
       data: attachmentData,
       mediaType: attachment.mediaType,
-      ...(attachment.filename === undefined ? {} : { filename: attachment.filename }),
-    });
+    };
+    if (attachment.filename !== undefined) file.filename = attachment.filename;
+    content.push(file);
   }
   return { role: "user", content };
 }

@@ -1,4 +1,9 @@
-import type { ChannelActionEvent, ChannelEvent, ChannelMessageEvent } from "@anvia/channel";
+import type {
+  ChannelActionEvent,
+  ChannelConversation,
+  ChannelEvent,
+  ChannelMessageEvent,
+} from "@anvia/channel";
 import { isChannelActionId } from "@anvia/channel";
 import { isDiscordSnowflake } from "./snowflake.js";
 import type {
@@ -9,6 +14,8 @@ import type {
   DiscordGatewayMessageEdited,
   DiscordGatewayReaction,
 } from "./types.js";
+
+type Mutable<T> = { -readonly [Key in keyof T]: T[Key] };
 
 export function normalizeDiscordEvent(
   event: DiscordGatewayEvent,
@@ -36,16 +43,12 @@ export function normalizeDiscordMessage(
     ? (message.parentChannelId ?? message.channelId)
     : message.channelId;
 
-  return {
+  const event: Mutable<ChannelMessageEvent<DiscordGatewayMessage>> = {
     type: "message",
     id: message.id,
     platform: "discord",
     accountId: message.bot.id,
-    conversation: {
-      id: conversationId,
-      kind: message.direct ? "direct" : "channel",
-      ...(threadId === undefined ? {} : { threadId }),
-    },
+    conversation: conversation(conversationId, message.direct, threadId),
     sender: {
       id: message.author.id,
       displayName:
@@ -63,25 +66,24 @@ export function normalizeDiscordMessage(
         size: attachment.size,
       };
     }),
-    ...(message.replyToMessageId === undefined
-      ? {}
-      : {
-          replyTo: {
-            messageId: message.replyToMessageId,
-            ...(message.replyToUser === undefined
-              ? {}
-              : {
-                  sender: {
-                    id: message.replyToUser.id,
-                    displayName: message.replyToUser.globalName ?? message.replyToUser.username,
-                    bot: message.replyToUser.bot,
-                  },
-                }),
-          },
-        }),
     mentionedBot: message.mentionedBot,
     raw: message,
   };
+  if (message.replyToMessageId !== undefined) {
+    if (message.replyToUser === undefined) {
+      event.replyTo = { messageId: message.replyToMessageId };
+    } else {
+      event.replyTo = {
+        messageId: message.replyToMessageId,
+        sender: {
+          id: message.replyToUser.id,
+          displayName: message.replyToUser.globalName ?? message.replyToUser.username,
+          bot: message.replyToUser.bot,
+        },
+      };
+    }
+  }
+  return event;
 }
 
 function normalizeDiscordEdit(
@@ -181,12 +183,9 @@ function validLifecycleBase(
 
 function gatewayConversation(
   event: DiscordGatewayMessageEdited | DiscordGatewayMessageDeleted | DiscordGatewayReaction,
-) {
-  return {
-    id: event.parentChannelId ?? event.channelId,
-    kind: event.direct ? "direct" : "channel",
-    ...(event.thread ? { threadId: event.channelId } : {}),
-  } as const;
+): ChannelConversation {
+  const threadId = event.thread ? event.channelId : undefined;
+  return conversation(event.parentChannelId ?? event.channelId, event.direct, threadId);
 }
 
 function normalizedAttachment(attachment: DiscordGatewayMessage["attachments"][number]) {
@@ -222,11 +221,11 @@ export function normalizeDiscordAction(
     id: action.id,
     platform: "discord",
     accountId: action.bot.id,
-    conversation: {
-      id: action.parentChannelId ?? action.channelId,
-      kind: action.direct ? "direct" : "channel",
-      ...(action.thread ? { threadId: action.channelId } : {}),
-    },
+    conversation: conversation(
+      action.parentChannelId ?? action.channelId,
+      action.direct,
+      action.thread ? action.channelId : undefined,
+    ),
     sender: {
       id: action.user.id,
       displayName: action.user.globalName ?? action.user.username,
@@ -236,6 +235,11 @@ export function normalizeDiscordAction(
     actionId: action.actionId,
     raw: action,
   };
+}
+
+function conversation(id: string, direct: boolean, threadId?: string): ChannelConversation {
+  if (threadId === undefined) return { id, kind: direct ? "direct" : "channel" };
+  return { id, kind: direct ? "direct" : "channel", threadId };
 }
 
 function validDiscordMessage(message: DiscordGatewayMessage): boolean {

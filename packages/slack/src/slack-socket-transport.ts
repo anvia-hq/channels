@@ -18,6 +18,8 @@ import type {
 const MAX_REMEMBERED_MESSAGES = 1_000;
 const DEFAULT_MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024;
 
+type Mutable<T> = { -readonly [Key in keyof T]: T[Key] };
+
 export type SlackWebClient = Readonly<{
   authenticate(): Promise<unknown>;
   postMessage(
@@ -265,15 +267,17 @@ function slackWebClient(
   const client = new WebClient(botToken);
   return {
     authenticate: () => client.auth.test(),
-    postMessage: (channelId, threadTimestamp, message) =>
-      client.chat.postMessage({
+    postMessage: (channelId, threadTimestamp, message) => {
+      const request = {
         channel: channelId,
         ...slackMessageBody(message),
-        ...(threadTimestamp === undefined ? {} : { thread_ts: threadTimestamp }),
         link_names: false,
         unfurl_links: false,
         unfurl_media: false,
-      } as Parameters<typeof client.chat.postMessage>[0]),
+      } as Parameters<typeof client.chat.postMessage>[0];
+      if (threadTimestamp !== undefined) request.thread_ts = threadTimestamp;
+      return client.chat.postMessage(request);
+    },
     updateMessage: (channelId, timestamp, message) =>
       client.chat.update({
         channel: channelId,
@@ -298,11 +302,12 @@ function slackWebClient(
     },
     downloadFile: async (url, maximumBytes, signal) => {
       try {
-        const response = await fetchImplementation(url, {
+        const request: RequestInit = {
           headers: { authorization: `Bearer ${botToken}` },
           redirect: "error",
-          ...(signal === undefined ? {} : { signal }),
-        });
+        };
+        if (signal !== undefined) request.signal = signal;
+        const response = await fetchImplementation(url, request);
         if (!response.ok) {
           throw new Error(`Slack file download failed with HTTP ${response.status}`);
         }
@@ -381,11 +386,12 @@ function sentMessage(value: unknown, fallbackThread: string | undefined): SlackS
     isRecord(value.message) && isSlackTimestamp(value.message.thread_ts)
       ? value.message.thread_ts
       : fallbackThread;
-  return {
+  const sent: Mutable<SlackSentMessage> = {
     channelId: value.channel,
     timestamp: value.ts,
-    ...(responseThread === undefined ? {} : { threadTimestamp: responseThread }),
   };
+  if (responseThread !== undefined) sent.threadTimestamp = responseThread;
+  return sent;
 }
 
 function sanitizeSlackText(text: string): string {
@@ -393,15 +399,21 @@ function sanitizeSlackText(text: string): string {
 }
 
 function sanitizeSlackMessage(message: ChannelMessage): ChannelMessage {
-  return {
+  const sanitized: {
+    text: string;
+    actions?: NonNullable<ChannelMessage["actions"]>;
+    attachments?: NonNullable<ChannelMessage["attachments"]>;
+    replyToMessageId?: string;
+  } = {
     // Slack requires a text fallback even when the visible content is only a file.
     text: message.text.length === 0 ? "\u200b" : sanitizeSlackText(message.text),
-    ...(message.actions === undefined ? {} : { actions: message.actions }),
-    ...(message.attachments === undefined ? {} : { attachments: message.attachments }),
-    ...(message.replyToMessageId === undefined
-      ? {}
-      : { replyToMessageId: message.replyToMessageId }),
   };
+  if (message.actions !== undefined) sanitized.actions = message.actions;
+  if (message.attachments !== undefined) sanitized.attachments = message.attachments;
+  if (message.replyToMessageId !== undefined) {
+    sanitized.replyToMessageId = message.replyToMessageId;
+  }
+  return sanitized;
 }
 
 export function slackMessageBody(
@@ -409,7 +421,10 @@ export function slackMessageBody(
   editing = false,
 ): Readonly<Record<string, unknown>> {
   const actions = message.actions;
-  if (actions === undefined) return { text: message.text, ...(editing ? { blocks: [] } : {}) };
+  if (actions === undefined) {
+    if (editing) return { text: message.text, blocks: [] };
+    return { text: message.text };
+  }
   return {
     text: message.text,
     blocks: [
@@ -419,15 +434,18 @@ export function slackMessageBody(
       })),
       {
         type: "actions",
-        elements: actions.map((action) => ({
-          type: "button",
-          action_id: action.id,
-          value: action.id,
-          text: { type: "plain_text", text: action.label },
-          ...(action.style === undefined || action.style === "default"
-            ? {}
-            : { style: action.style }),
-        })),
+        elements: actions.map((action) => {
+          const button: Record<string, unknown> = {
+            type: "button",
+            action_id: action.id,
+            value: action.id,
+            text: { type: "plain_text", text: action.label },
+          };
+          if (action.style !== undefined && action.style !== "default") {
+            button.style = action.style;
+          }
+          return button;
+        }),
       },
     ],
   };

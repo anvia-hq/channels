@@ -1,5 +1,6 @@
 import type {
   ChannelActionEvent,
+  ChannelConversation,
   ChannelConversationKind,
   ChannelEvent,
   ChannelMessageEvent,
@@ -14,6 +15,8 @@ import type {
   SlackSocketMessageEdited,
   SlackSocketReaction,
 } from "./types.js";
+
+type Mutable<T> = { -readonly [Key in keyof T]: T[Key] };
 
 export function normalizeSlackEvent(
   event: SlackSocketEvent,
@@ -32,38 +35,27 @@ export function normalizeSlackMessage(
     return undefined;
   }
 
-  return {
+  const event: Mutable<ChannelMessageEvent<SlackSocketMessage>> = {
     type: "message",
     id: message.eventId,
     platform: "slack",
     accountId: message.teamId,
-    conversation: {
-      id: message.channelId,
-      kind: conversationKind(message.channelType),
-      ...(message.threadTimestamp === undefined ? {} : { threadId: message.threadTimestamp }),
-    },
-    sender: {
-      id: message.senderId,
-      ...(message.senderDisplayName === undefined
-        ? {}
-        : { displayName: message.senderDisplayName }),
-      bot: message.senderBot,
-    },
+    conversation: conversation(
+      message.channelId,
+      conversationKind(message.channelType),
+      message.threadTimestamp,
+    ),
+    sender: sender(message.senderId, message.senderBot, message.senderDisplayName),
     text: message.text,
-    attachments: message.files.map((file) => ({
-      id: file.id,
-      type: attachmentType(file.mediaType),
-      mediaType: file.mediaType,
-      filename: file.name,
-      ...(file.size === undefined ? {} : { size: file.size }),
-    })),
-    ...(message.threadTimestamp === undefined || message.threadTimestamp === message.timestamp
-      ? {}
-      : { replyTo: { messageId: message.threadTimestamp } }),
+    attachments: message.files.map(normalizedFile),
     mentionedBot:
       message.type === "app_mention" || message.text.includes(`<@${message.botUserId}>`),
     raw: message,
   };
+  if (message.threadTimestamp !== undefined && message.threadTimestamp !== message.timestamp) {
+    event.replyTo = { messageId: message.threadTimestamp };
+  }
+  return event;
 }
 
 function normalizeSlackEdit(
@@ -86,11 +78,7 @@ function normalizeSlackEdit(
     platform: "slack",
     accountId: event.teamId,
     conversation: eventConversation(event),
-    sender: {
-      id: event.senderId,
-      ...(event.senderDisplayName === undefined ? {} : { displayName: event.senderDisplayName }),
-      bot: event.senderBot,
-    },
+    sender: sender(event.senderId, event.senderBot, event.senderDisplayName),
     messageId: event.messageTimestamp,
     text: event.text,
     attachments: event.files.map(normalizedFile),
@@ -156,22 +144,25 @@ function validLifecycleBase(
 
 function eventConversation(
   event: SlackSocketMessageEdited | SlackSocketMessageDeleted | SlackSocketReaction,
-) {
-  return {
-    id: event.channelId,
-    kind: conversationKind(event.channelType),
-    ...(event.threadTimestamp === undefined ? {} : { threadId: event.threadTimestamp }),
-  } as const;
+): ChannelConversation {
+  return conversation(event.channelId, conversationKind(event.channelType), event.threadTimestamp);
 }
 
 function normalizedFile(file: SlackSocketMessage["files"][number]) {
-  return {
+  const attachment: {
+    id: string;
+    type: "image" | "audio" | "video" | "file";
+    mediaType: string;
+    filename: string;
+    size?: number;
+  } = {
     id: file.id,
     type: attachmentType(file.mediaType),
     mediaType: file.mediaType,
     filename: file.name,
-    ...(file.size === undefined ? {} : { size: file.size }),
-  } as const;
+  };
+  if (file.size !== undefined) attachment.size = file.size;
+  return attachment;
 }
 
 export function normalizeSlackAction(
@@ -183,20 +174,30 @@ export function normalizeSlackAction(
     id: action.eventId,
     platform: "slack",
     accountId: action.teamId,
-    conversation: {
-      id: action.channelId,
-      kind: conversationKind(action.channelType),
-      ...(action.threadTimestamp === undefined ? {} : { threadId: action.threadTimestamp }),
-    },
-    sender: {
-      id: action.senderId,
-      ...(action.senderDisplayName === undefined ? {} : { displayName: action.senderDisplayName }),
-      bot: false,
-    },
+    conversation: conversation(
+      action.channelId,
+      conversationKind(action.channelType),
+      action.threadTimestamp,
+    ),
+    sender: sender(action.senderId, false, action.senderDisplayName),
     messageId: action.messageTimestamp,
     actionId: action.actionId,
     raw: action,
   };
+}
+
+function conversation(
+  id: string,
+  kind: ChannelConversationKind,
+  threadId?: string,
+): ChannelConversation {
+  if (threadId === undefined) return { id, kind };
+  return { id, kind, threadId };
+}
+
+function sender(id: string, bot: boolean, displayName?: string) {
+  if (displayName === undefined) return { id, bot };
+  return { id, displayName, bot };
 }
 
 function validSlackAction(action: SlackSocketAction): boolean {

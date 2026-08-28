@@ -16,6 +16,7 @@ import { isDiscordSnowflake } from "./snowflake.js";
 import type {
   DiscordGateway,
   DiscordGatewayAction,
+  DiscordGatewayAttachment,
   DiscordGatewayEvent,
   DiscordGatewayHandler,
   DiscordGatewayMessage,
@@ -44,6 +45,8 @@ type MessageUpdateListener = (...args: ClientEvents[Events.MessageUpdate]) => vo
 type MessageDeleteListener = (...args: ClientEvents[Events.MessageDelete]) => void;
 type ReactionAddListener = (...args: ClientEvents[Events.MessageReactionAdd]) => void;
 type ReactionRemoveListener = (...args: ClientEvents[Events.MessageReactionRemove]) => void;
+
+type Mutable<T> = { -readonly [Key in keyof T]: T[Key] };
 
 export type DiscordJsGatewayOptions = Readonly<{
   token: string;
@@ -101,15 +104,17 @@ export class DiscordJsGateway implements DiscordGateway {
     if (this.client !== undefined) throw new Error("Discord gateway is already running");
     if (typeof handler !== "function") throw new TypeError("Discord gateway handler is required");
 
+    const intents = [
+      GatewayIntentBits.Guilds,
+      GatewayIntentBits.GuildMessages,
+      GatewayIntentBits.DirectMessages,
+      GatewayIntentBits.GuildMessageReactions,
+      GatewayIntentBits.DirectMessageReactions,
+    ];
+    if (this.messageContentIntent) intents.push(GatewayIntentBits.MessageContent);
+
     const client = new Client({
-      intents: [
-        GatewayIntentBits.Guilds,
-        GatewayIntentBits.GuildMessages,
-        GatewayIntentBits.DirectMessages,
-        GatewayIntentBits.GuildMessageReactions,
-        GatewayIntentBits.DirectMessageReactions,
-        ...(this.messageContentIntent ? [GatewayIntentBits.MessageContent] : []),
-      ],
+      intents,
       partials: [Partials.Channel, Partials.Message, Partials.Reaction, Partials.User],
     });
     const messageListener = (message: Message) => {
@@ -247,10 +252,14 @@ export class DiscordJsGateway implements DiscordGateway {
     message: Parameters<DiscordGateway["send"]>[1],
   ): Promise<DiscordGatewaySentMessage> {
     const files = await discordFiles(message, this.fetch, this.maximumAttachmentBytes);
-    const response = await this.rest.post(Routes.channelMessages(channelId), {
+    const request: {
+      body: Readonly<Record<string, unknown>>;
+      files?: NonNullable<RestRequest["files"]>;
+    } = {
       body: messageBody(message),
-      ...(files.length === 0 ? {} : { files }),
-    });
+    };
+    if (files.length > 0) request.files = files;
+    const response = await this.rest.post(Routes.channelMessages(channelId), request);
     return sentMessage(response);
   }
 
@@ -260,10 +269,14 @@ export class DiscordJsGateway implements DiscordGateway {
     message: Parameters<DiscordGateway["edit"]>[2],
   ): Promise<void> {
     const files = await discordFiles(message, this.fetch, this.maximumAttachmentBytes);
-    await this.rest.patch(Routes.channelMessage(channelId, messageId), {
+    const request: {
+      body: Readonly<Record<string, unknown>>;
+      files?: NonNullable<RestRequest["files"]>;
+    } = {
       body: messageBody(message),
-      ...(files.length === 0 ? {} : { files }),
-    });
+    };
+    if (files.length > 0) request.files = files;
+    await this.rest.patch(Routes.channelMessage(channelId, messageId), request);
   }
 
   async delete(channelId: string, messageId: string): Promise<void> {
@@ -326,34 +339,39 @@ function gatewayMessageFromDiscord(
   const thread = message.channel.isThread();
   const parentChannelId = message.channel.isThread() ? message.channel.parentId : null;
 
-  return {
-    type: "message",
-    id: message.id,
-    channelId: message.channelId,
-    ...(message.guildId === null ? {} : { guildId: message.guildId }),
-    ...(parentChannelId === null ? {} : { parentChannelId }),
-    content: message.content,
-    attachments: message.attachments.map((attachment) => ({
+  const attachments = message.attachments.map((attachment) => {
+    const gatewayAttachment: Mutable<DiscordGatewayAttachment> = {
       id: attachment.id,
       url: attachment.url,
       filename: attachment.name,
-      ...(attachment.contentType === null ? {} : { mediaType: attachment.contentType }),
       size: attachment.size,
-    })),
+    };
+    if (attachment.contentType !== null) gatewayAttachment.mediaType = attachment.contentType;
+    return gatewayAttachment;
+  });
+  const gatewayMessage: Mutable<DiscordGatewayMessage> = {
+    type: "message",
+    id: message.id,
+    channelId: message.channelId,
+    content: message.content,
+    attachments,
     author: gatewayUser(message.author),
     bot: gatewayUser(bot),
-    ...(message.member === null ? {} : { memberDisplayName: message.member.displayName }),
     direct: message.channel.isDMBased(),
     thread,
     system: message.system,
     mentionedBot: message.mentions.users.has(bot.id) || message.mentions.repliedUser?.id === bot.id,
-    ...(message.reference?.messageId === undefined
-      ? {}
-      : { replyToMessageId: message.reference.messageId }),
-    ...(message.mentions.repliedUser === null || message.mentions.repliedUser === undefined
-      ? {}
-      : { replyToUser: gatewayUser(message.mentions.repliedUser) }),
   };
+  if (message.guildId !== null) gatewayMessage.guildId = message.guildId;
+  if (parentChannelId !== null) gatewayMessage.parentChannelId = parentChannelId;
+  if (message.member !== null) gatewayMessage.memberDisplayName = message.member.displayName;
+  if (message.reference?.messageId !== undefined) {
+    gatewayMessage.replyToMessageId = message.reference.messageId;
+  }
+  if (message.mentions.repliedUser !== null && message.mentions.repliedUser !== undefined) {
+    gatewayMessage.replyToUser = gatewayUser(message.mentions.repliedUser);
+  }
+  return gatewayMessage;
 }
 
 function gatewayEditedMessageFromDiscord(
@@ -379,17 +397,18 @@ function gatewayDeletedMessageFromDiscord(
   if (bot === null) return undefined;
   const thread = message.channel.isThread();
   const parentChannelId = message.channel.isThread() ? message.channel.parentId : null;
-  return {
+  const deleted: Mutable<DiscordGatewayMessageDeleted> = {
     type: "message-deleted",
     id: `${message.id}:deleted`,
     channelId: message.channelId,
-    ...(message.guildId === null ? {} : { guildId: message.guildId }),
-    ...(parentChannelId === null ? {} : { parentChannelId }),
     messageId: message.id,
     bot: gatewayUser(bot),
     direct: message.channel.isDMBased(),
     thread,
   };
+  if (message.guildId !== null) deleted.guildId = message.guildId;
+  if (parentChannelId !== null) deleted.parentChannelId = parentChannelId;
+  return deleted;
 }
 
 function gatewayReactionFromDiscord(
@@ -403,14 +422,10 @@ function gatewayReactionFromDiscord(
   const message = reaction.message;
   const thread = message.channel.isThread();
   const identifier = reaction.emoji.identifier;
-  return {
+  const gatewayReaction: Mutable<DiscordGatewayReaction> = {
     type: "reaction",
     id: `${message.id}:reaction:${user.id}:${identifier}:${removed ? "removed" : "added"}`,
     channelId: message.channelId,
-    ...(message.guildId === null ? {} : { guildId: message.guildId }),
-    ...(thread && message.channel.parentId !== null
-      ? { parentChannelId: message.channel.parentId }
-      : {}),
     messageId: message.id,
     reaction: identifier,
     removed,
@@ -419,6 +434,11 @@ function gatewayReactionFromDiscord(
     direct: message.channel.isDMBased(),
     thread,
   };
+  if (message.guildId !== null) gatewayReaction.guildId = message.guildId;
+  if (thread && message.channel.parentId !== null) {
+    gatewayReaction.parentChannelId = message.channel.parentId;
+  }
+  return gatewayReaction;
 }
 
 function gatewayActionFromDiscord(
@@ -429,12 +449,10 @@ function gatewayActionFromDiscord(
   const channel = interaction.channel;
   if (bot === null || channel === null) return undefined;
   const thread = channel.isThread();
-  return {
+  const action: Mutable<DiscordGatewayAction> = {
     type: "action",
     id: interaction.id,
     channelId: interaction.channelId,
-    ...(interaction.guildId === null ? {} : { guildId: interaction.guildId }),
-    ...(thread && channel.parentId !== null ? { parentChannelId: channel.parentId } : {}),
     messageId: interaction.message.id,
     actionId: interaction.customId,
     user: gatewayUser(interaction.user),
@@ -442,41 +460,46 @@ function gatewayActionFromDiscord(
     direct: channel.isDMBased(),
     thread,
   };
+  if (interaction.guildId !== null) action.guildId = interaction.guildId;
+  if (thread && channel.parentId !== null) action.parentChannelId = channel.parentId;
+  return action;
 }
 
 function gatewayUser(user: Message["author"]): DiscordGatewayUser {
-  return {
+  const gateway: Mutable<DiscordGatewayUser> = {
     id: user.id,
     username: user.username,
-    ...(user.globalName === null ? {} : { globalName: user.globalName }),
     bot: user.bot,
   };
+  if (user.globalName !== null) gateway.globalName = user.globalName;
+  return gateway;
 }
 
 function messageBody(
   message: Parameters<DiscordGateway["send"]>[1],
 ): Readonly<Record<string, unknown>> {
-  return {
+  const body: Record<string, unknown> = {
     content: message.text,
     allowed_mentions: { parse: [] },
-    ...(message.replyToMessageId === undefined
-      ? {}
-      : { message_reference: { message_id: message.replyToMessageId } }),
-    components:
-      message.actions === undefined
-        ? []
-        : [
-            {
-              type: 1,
-              components: message.actions.map((action) => ({
-                type: 2,
-                style: action.style === "primary" ? 1 : action.style === "danger" ? 4 : 2,
-                label: action.label,
-                custom_id: action.id,
-              })),
-            },
-          ],
+    components: [],
   };
+  if (message.replyToMessageId !== undefined) {
+    body.message_reference = { message_id: message.replyToMessageId };
+  }
+  if (message.actions !== undefined) {
+    body.components = [
+      {
+        type: 1,
+        components: message.actions.map((action) => ({
+          type: 2,
+          style: action.style === "primary" ? 1 : action.style === "danger" ? 4 : 2,
+          label: action.label,
+          custom_id: action.id,
+        })),
+      },
+    ];
+  }
+  return body;
 }
 
 async function discordFiles(

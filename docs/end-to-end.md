@@ -82,18 +82,20 @@ const channel = telegram({ token: process.env.TELEGRAM_BOT_TOKEN! });
 await channel.start(async (event) => {
   if (event.type !== "message") return;
 
-  await sendChannelMessage(
-    channel,
-    {
-      platform: event.platform,
-      conversationId: event.conversation.id,
-      ...(event.accountId === undefined ? {} : { accountId: event.accountId }),
-      ...(event.conversation.threadId === undefined
-        ? {}
-        : { threadId: event.conversation.threadId }),
-    },
-    { text: `Received ${event.text.length} characters.` },
-  );
+  const address: {
+    platform: string;
+    accountId?: string;
+    conversationId: string;
+    threadId?: string;
+  } = { platform: event.platform, conversationId: event.conversation.id };
+  if (event.accountId !== undefined) address.accountId = event.accountId;
+  if (event.conversation.threadId !== undefined) {
+    address.threadId = event.conversation.threadId;
+  }
+
+  await sendChannelMessage(channel, address, {
+    text: `Received ${event.text.length} characters.`,
+  });
 });
 ```
 

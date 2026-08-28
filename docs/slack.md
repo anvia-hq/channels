@@ -109,14 +109,15 @@ Slack thread timestamps map directly to `ChannelAddress.threadId`. `replyToMessa
 precedence when explicitly provided; otherwise sends to the address thread:
 
 ```ts
-await channel.send(
-  {
-    platform: "slack",
-    conversationId: event.conversation.id,
-    ...(event.conversation.threadId === undefined ? {} : { threadId: event.conversation.threadId }),
-  },
-  { text: "Following up in this thread." },
-);
+const address: { platform: string; conversationId: string; threadId?: string } = {
+  platform: "slack",
+  conversationId: event.conversation.id,
+};
+if (event.conversation.threadId !== undefined) {
+  address.threadId = event.conversation.threadId;
+}
+
+await channel.send(address, { text: "Following up in this thread." });
 ```
 
 Message IDs and thread IDs are Slack timestamps such as `1712345678.123456`, not arbitrary UUIDs.

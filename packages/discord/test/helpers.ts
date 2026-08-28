@@ -52,10 +52,9 @@ export function fakeGateway(): FakeDiscordGateway {
 export function discordMessage(
   overrides: Partial<DiscordGatewayMessage> = {},
 ): DiscordGatewayMessage {
-  return {
+  const message: { -readonly [Key in keyof DiscordGatewayMessage]: DiscordGatewayMessage[Key] } = {
     id: "10",
     channelId: "20",
-    ...(overrides.direct === true ? {} : { guildId: "30" }),
     content: "hello",
     attachments: [],
     author: {
@@ -74,7 +73,10 @@ export function discordMessage(
     thread: false,
     system: false,
     mentionedBot: true,
-    ...overrides,
     type: "message",
   };
+  if (overrides.direct !== true) message.guildId = "30";
+  Object.assign(message, overrides);
+  message.type = "message";
+  return message;
 }

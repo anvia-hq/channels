@@ -7,7 +7,11 @@ import type {
   SlackSocketAction,
   SlackSocketEvent,
   SlackSocketMessage,
+  SlackSocketMessageDeleted,
+  SlackSocketMessageEdited,
 } from "./types.js";
+
+type Mutable<T> = { -readonly [Key in keyof T]: T[Key] };
 
 export function parseSlackSocketEvent(
   body: unknown,
@@ -42,22 +46,23 @@ export function parseSlackSocketEvent(
   const threadTimestamp = isSlackTimestamp(event.thread_ts) ? event.thread_ts : undefined;
   const senderDisplayName = displayName(event.user_profile);
 
-  return {
+  const message: Mutable<SlackSocketMessage> = {
     eventId: body.event_id,
     type: event.type,
     teamId,
     channelId: event.channel,
     channelType,
     timestamp: event.ts,
-    ...(threadTimestamp === undefined ? {} : { threadTimestamp }),
     senderId,
-    ...(senderDisplayName === undefined ? {} : { senderDisplayName }),
     senderBot:
       isSlackId(event.bot_id) || isSlackId(event.app_id) || senderId === identity.botUserId,
     text: event.text,
     files,
     botUserId: identity.botUserId,
   };
+  if (threadTimestamp !== undefined) message.threadTimestamp = threadTimestamp;
+  if (senderDisplayName !== undefined) message.senderDisplayName = senderDisplayName;
+  return message;
 }
 
 function parseLifecycleEvent(
@@ -99,16 +104,17 @@ function parseLifecycleEvent(
       previous !== undefined && isSlackTimestamp(previous.thread_ts)
         ? previous.thread_ts
         : undefined;
-    return {
+    const deleted: Mutable<SlackSocketMessageDeleted> = {
       type: "message-deleted",
       eventId: body.event_id as string,
       teamId,
       channelId: event.channel,
       channelType: slackChannelType(event.channel_type, event.channel),
       messageTimestamp: event.deleted_ts,
-      ...(threadTimestamp === undefined ? {} : { threadTimestamp }),
       botUserId: identity.botUserId,
     };
+    if (threadTimestamp !== undefined) deleted.threadTimestamp = threadTimestamp;
+    return deleted;
   }
   if (event.subtype !== "message_changed" || !isRecord(event.message)) return undefined;
   const message = event.message;
@@ -123,22 +129,23 @@ function parseLifecycleEvent(
   if (senderId === undefined) return undefined;
   const threadTimestamp = isSlackTimestamp(message.thread_ts) ? message.thread_ts : undefined;
   const senderDisplayName = displayName(message.user_profile);
-  return {
+  const edited: Mutable<SlackSocketMessageEdited> = {
     type: "message-edited",
     eventId: body.event_id as string,
     teamId,
     channelId: event.channel,
     channelType: slackChannelType(event.channel_type, event.channel),
     messageTimestamp: message.ts,
-    ...(threadTimestamp === undefined ? {} : { threadTimestamp }),
     senderId,
-    ...(senderDisplayName === undefined ? {} : { senderDisplayName }),
     senderBot:
       isSlackId(message.bot_id) || isSlackId(message.app_id) || senderId === identity.botUserId,
     text: message.text,
     files,
     botUserId: identity.botUserId,
   };
+  if (threadTimestamp !== undefined) edited.threadTimestamp = threadTimestamp;
+  if (senderDisplayName !== undefined) edited.senderDisplayName = senderDisplayName;
+  return edited;
 }
 
 export function parseSlackSocketInteraction(
@@ -172,20 +179,21 @@ export function parseSlackSocketInteraction(
   const eventId = nonemptyString(body.trigger_id)
     ? body.trigger_id
     : `${message.ts}:${actions[0].action_ts}`;
-  return {
+  const action: Mutable<SlackSocketAction> = {
     type: "action",
     eventId,
     teamId: team.id,
     channelId: channel.id,
     channelType: slackChannelType(channel.type, channel.id),
     messageTimestamp: message.ts,
-    ...(threadTimestamp === undefined ? {} : { threadTimestamp }),
     senderId: user.id,
-    ...(nonemptyString(user.name) ? { senderDisplayName: user.name } : {}),
     actionId: actions[0].value,
     actionTimestamp: actions[0].action_ts,
     botUserId: identity.botUserId,
   };
+  if (threadTimestamp !== undefined) action.threadTimestamp = threadTimestamp;
+  if (nonemptyString(user.name)) action.senderDisplayName = user.name;
+  return action;
 }
 
 function slackFiles(value: unknown): readonly SlackFile[] | undefined {
@@ -203,15 +211,16 @@ function slackFiles(value: unknown): readonly SlackFile[] | undefined {
     }
     const privateDownloadUrl = candidate.url_private_download ?? candidate.url_private;
     if (!validPrivateDownloadUrl(privateDownloadUrl)) return undefined;
-    files.push({
+    const file: Mutable<SlackFile> = {
       id: candidate.id,
       name: nonemptyString(candidate.name) ? candidate.name : candidate.id,
       mediaType: nonemptyString(candidate.mimetype)
         ? candidate.mimetype
         : "application/octet-stream",
-      ...(candidate.size === undefined ? {} : { size: Number(candidate.size) }),
       privateDownloadUrl,
-    });
+    };
+    if (candidate.size !== undefined) file.size = Number(candidate.size);
+    files.push(file);
   }
   return files;
 }

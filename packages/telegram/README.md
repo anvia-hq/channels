@@ -24,18 +24,18 @@ const channel = telegram({
 
 await channel.start(async (event) => {
   if (event.type !== "message") return;
-  await sendChannelMessage(
-    channel,
-    {
-      platform: "telegram",
-      conversationId: event.conversation.id,
-      ...(event.accountId === undefined ? {} : { accountId: event.accountId }),
-      ...(event.conversation.threadId === undefined
-        ? {}
-        : { threadId: event.conversation.threadId }),
-    },
-    { text: `Received: ${event.text}` },
-  );
+  const address: {
+    platform: string;
+    accountId?: string;
+    conversationId: string;
+    threadId?: string;
+  } = { platform: "telegram", conversationId: event.conversation.id };
+  if (event.accountId !== undefined) address.accountId = event.accountId;
+  if (event.conversation.threadId !== undefined) {
+    address.threadId = event.conversation.threadId;
+  }
+
+  await sendChannelMessage(channel, address, { text: `Received: ${event.text}` });
 });
 
 // During graceful application shutdown:

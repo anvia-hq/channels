@@ -96,11 +96,16 @@ function serializePending(pending: PendingChannelAgentInteraction): string {
   ) {
     throw new TypeError("Channel interaction action token must not be empty");
   }
-  return JSON.stringify({
+  const value: {
+    continuation: typeof continuation;
+    interaction: typeof interaction;
+    actionToken?: string;
+  } = {
     continuation,
     interaction,
-    ...(pending.actionToken === undefined ? {} : { actionToken: pending.actionToken }),
-  });
+  };
+  if (pending.actionToken !== undefined) value.actionToken = pending.actionToken;
+  return JSON.stringify(value);
 }
 
 function parsePending(value: unknown): PendingChannelAgentInteraction {
@@ -121,11 +126,8 @@ function parsePending(value: unknown): PendingChannelAgentInteraction {
   if (actionToken !== undefined && (typeof actionToken !== "string" || actionToken.length === 0)) {
     throw new TypeError("Stored channel interaction action token is invalid");
   }
-  return {
-    continuation,
-    interaction,
-    ...(actionToken === undefined ? {} : { actionToken }),
-  };
+  if (actionToken === undefined) return { continuation, interaction };
+  return { continuation, interaction, actionToken };
 }
 
 function sqliteIdentifier(value: string): string {

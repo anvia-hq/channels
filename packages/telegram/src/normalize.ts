@@ -1,9 +1,11 @@
 import type {
   ChannelActionEvent,
+  ChannelConversation,
   ChannelConversationKind,
   ChannelEvent,
   ChannelMessageEditedEvent,
   ChannelMessageEvent,
+  ChannelReply,
 } from "@anvia/channel";
 import { isChannelActionId } from "@anvia/channel";
 import type {
@@ -14,6 +16,8 @@ import type {
   TelegramUpdate,
   TelegramUser,
 } from "./types.js";
+
+type Mutable<T> = { -readonly [Key in keyof T]: T[Key] };
 
 export function normalizeTelegramUpdate(
   update: TelegramUpdate,
@@ -29,49 +33,40 @@ export function normalizeTelegramUpdate(
   if (text.length === 0 && attachments.length === 0) return [];
 
   const threadId = message.message_thread_id;
-  return [
-    {
-      type: "message",
-      id: String(update.update_id),
-      platform: "telegram",
-      accountId: String(bot.id),
-      conversation: {
-        id: String(message.chat.id),
-        kind: conversationKind(message.chat.type),
-        ...(threadId === undefined ? {} : { threadId: String(threadId) }),
-      },
-      sender: {
-        id: String(message.from.id),
-        displayName: displayName(message.from),
-        bot: message.from.is_bot,
-      },
-      text,
-      attachments,
-      ...(message.reply_to_message === undefined
-        ? {}
-        : {
-            replyTo: {
-              messageId: String(message.reply_to_message.message_id),
-              ...(message.reply_to_message.from === undefined
-                ? {}
-                : {
-                    sender: {
-                      id: String(message.reply_to_message.from.id),
-                      displayName: displayName(message.reply_to_message.from),
-                      bot: message.reply_to_message.from.is_bot,
-                    },
-                  }),
-              ...((message.reply_to_message.text ?? message.reply_to_message.caption) === undefined
-                ? {}
-                : { text: message.reply_to_message.text ?? message.reply_to_message.caption }),
-            },
-          }),
-      mentionedBot:
-        mentionsBot(text, message.entities ?? message.caption_entities ?? [], bot) ||
-        message.reply_to_message?.from?.id === bot.id,
-      raw: update,
+  const event: Mutable<ChannelMessageEvent<TelegramUpdate>> = {
+    type: "message",
+    id: String(update.update_id),
+    platform: "telegram",
+    accountId: String(bot.id),
+    conversation: conversation(message.chat, threadId),
+    sender: {
+      id: String(message.from.id),
+      displayName: displayName(message.from),
+      bot: message.from.is_bot,
     },
-  ];
+    text,
+    attachments,
+    mentionedBot:
+      mentionsBot(text, message.entities ?? message.caption_entities ?? [], bot) ||
+      message.reply_to_message?.from?.id === bot.id,
+    raw: update,
+  };
+  if (message.reply_to_message !== undefined) {
+    const reply: Mutable<ChannelReply> = {
+      messageId: String(message.reply_to_message.message_id),
+    };
+    if (message.reply_to_message.from !== undefined) {
+      reply.sender = {
+        id: String(message.reply_to_message.from.id),
+        displayName: displayName(message.reply_to_message.from),
+        bot: message.reply_to_message.from.is_bot,
+      };
+    }
+    const replyText = message.reply_to_message.text ?? message.reply_to_message.caption;
+    if (replyText !== undefined) reply.text = replyText;
+    event.replyTo = reply;
+  }
+  return [event];
 }
 
 function normalizeTelegramReaction(
@@ -134,11 +129,8 @@ function reactionSender(user: TelegramUser | undefined, actorChat: TelegramChat 
     actorChat.title ??
     actorChat.username ??
     [actorChat.first_name, actorChat.last_name].filter(Boolean).join(" ");
-  return {
-    id: String(actorChat.id),
-    ...(actorDisplayName.length === 0 ? {} : { displayName: actorDisplayName }),
-    bot: false,
-  } as const;
+  if (actorDisplayName.length === 0) return { id: String(actorChat.id), bot: false } as const;
+  return { id: String(actorChat.id), displayName: actorDisplayName, bot: false } as const;
 }
 
 function eventArray<RawEvent>(
@@ -161,13 +153,7 @@ function normalizeTelegramEdit(
     id: String(update.update_id),
     platform: "telegram",
     accountId: String(bot.id),
-    conversation: {
-      id: String(message.chat.id),
-      kind: conversationKind(message.chat.type),
-      ...(message.message_thread_id === undefined
-        ? {}
-        : { threadId: String(message.message_thread_id) }),
-    },
+    conversation: conversation(message.chat, message.message_thread_id),
     sender: {
       id: String(message.from.id),
       displayName: displayName(message.from),
@@ -194,13 +180,7 @@ function normalizeTelegramAction(
     id: String(update.update_id),
     platform: "telegram",
     accountId: String(bot.id),
-    conversation: {
-      id: String(message.chat.id),
-      kind: conversationKind(message.chat.type),
-      ...(message.message_thread_id === undefined
-        ? {}
-        : { threadId: String(message.message_thread_id) }),
-    },
+    conversation: conversation(message.chat, message.message_thread_id),
     sender: {
       id: String(query.from.id),
       displayName: displayName(query.from),
@@ -218,12 +198,18 @@ function telegramAttachments(
   const attachments: Array<ChannelMessageEvent["attachments"][number]> = [];
   const photo = message.photo?.at(-1);
   if (photo !== undefined) {
-    attachments.push({
+    const attachment: {
+      id: string;
+      type: "image";
+      mediaType: string;
+      size?: number;
+    } = {
       id: photo.file_id,
       type: "image",
       mediaType: "image/jpeg",
-      ...(photo.file_size === undefined ? {} : { size: photo.file_size }),
-    });
+    };
+    if (photo.file_size !== undefined) attachment.size = photo.file_size;
+    attachments.push(attachment);
   }
   for (const [type, file] of [
     ["file", message.document],
@@ -233,13 +219,20 @@ function telegramAttachments(
   ] as const) {
     if (file === undefined) continue;
     const mediaType = file.mime_type ?? defaultMediaType(type);
-    attachments.push({
+    const attachment: {
+      id: string;
+      type: "image" | "audio" | "video" | "file";
+      mediaType: string;
+      filename?: string;
+      size?: number;
+    } = {
       id: file.file_id,
       type: type === "file" && mediaType.startsWith("image/") ? "image" : type,
       mediaType,
-      ...(file.file_name === undefined ? {} : { filename: file.file_name }),
-      ...(file.file_size === undefined ? {} : { size: file.file_size }),
-    });
+    };
+    if (file.file_name !== undefined) attachment.filename = file.file_name;
+    if (file.file_size !== undefined) attachment.size = file.file_size;
+    attachments.push(attachment);
   }
   return attachments;
 }
@@ -254,6 +247,13 @@ function conversationKind(type: TelegramChatType): ChannelConversationKind {
   if (type === "private") return "direct";
   if (type === "channel") return "channel";
   return "group";
+}
+
+function conversation(chat: TelegramChat, threadId?: number): ChannelConversation {
+  const id = String(chat.id);
+  const kind = conversationKind(chat.type);
+  if (threadId === undefined) return { id, kind };
+  return { id, kind, threadId: String(threadId) };
 }
 
 function displayName(user: TelegramUser): string {

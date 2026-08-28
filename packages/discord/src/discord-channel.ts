@@ -69,19 +69,29 @@ export class DiscordChannel implements Channel<DiscordGatewayEvent> {
 
   constructor(options: DiscordChannelOptions) {
     this.onError = options.onError;
-    this.gateway =
-      options.gateway ??
-      new DiscordJsGateway({
-        token: options.token,
-        ...(options.messageContentIntent === undefined
-          ? {}
-          : { messageContentIntent: options.messageContentIntent }),
-        ...(options.fetch === undefined ? {} : { fetch: options.fetch }),
-        ...(options.maximumAttachmentBytes === undefined
-          ? {}
-          : { maximumAttachmentBytes: options.maximumAttachmentBytes }),
-        onError: (error) => this.reportError(error, { operation: "gateway" }),
-      });
+    if (options.gateway !== undefined && options.gateway !== null) {
+      this.gateway = options.gateway;
+      return;
+    }
+
+    const gatewayOptions: {
+      token: string;
+      messageContentIntent?: boolean;
+      fetch?: typeof globalThis.fetch;
+      maximumAttachmentBytes?: number;
+      onError: (error: unknown) => Promise<void>;
+    } = {
+      token: options.token,
+      onError: (error) => this.reportError(error, { operation: "gateway" }),
+    };
+    if (options.messageContentIntent !== undefined) {
+      gatewayOptions.messageContentIntent = options.messageContentIntent;
+    }
+    if (options.fetch !== undefined) gatewayOptions.fetch = options.fetch;
+    if (options.maximumAttachmentBytes !== undefined) {
+      gatewayOptions.maximumAttachmentBytes = options.maximumAttachmentBytes;
+    }
+    this.gateway = new DiscordJsGateway(gatewayOptions);
   }
 
   splitMessage(message: ChannelMessage): readonly ChannelMessage[] {
@@ -132,14 +142,21 @@ export class DiscordChannel implements Channel<DiscordGatewayEvent> {
     const targetChannelId = address.threadId ?? address.conversationId;
     const sent = await this.gateway.send(targetChannelId, message);
 
+    const sentAddress: {
+      platform: string;
+      accountId?: string;
+      conversationId: string;
+      threadId?: string;
+    } = {
+      platform: this.platform,
+      conversationId: address.threadId === undefined ? sent.channelId : address.conversationId,
+    };
+    if (address.accountId !== undefined) sentAddress.accountId = address.accountId;
+    if (address.threadId !== undefined) sentAddress.threadId = sent.channelId;
+
     return {
       id: sent.id,
-      address: {
-        platform: this.platform,
-        ...(address.accountId === undefined ? {} : { accountId: address.accountId }),
-        conversationId: address.threadId === undefined ? sent.channelId : address.conversationId,
-        ...(address.threadId === undefined ? {} : { threadId: sent.channelId }),
-      },
+      address: sentAddress,
     };
   }
 
