@@ -42,5 +42,7 @@ Incoming Discord threads are represented by a parent `conversationId` and their 
 Incoming images, audio, video, and other files are exposed as normalized attachments. Attachment
 loading returns Discord's HTTPS CDN URL without downloading the file into application memory.
 Outbound mentions are disabled so agent-generated text cannot unexpectedly ping users or roles.
+Portable message actions are rendered as Discord buttons, and button interactions are acknowledged
+before application processing.
 `sendChannelMessage` splits long text into ordered messages at Discord's boundary; `channel.send`
 sends one atomic message and rejects oversized text.

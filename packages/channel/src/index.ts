@@ -1,12 +1,25 @@
-export { sendChannelMessage, splitChannelText } from "./messages.js";
+export {
+  MAX_CHANNEL_ACTIONS,
+  MAX_CHANNEL_ACTION_ID_BYTES,
+  MAX_CHANNEL_ACTION_LABEL_LENGTH,
+  isChannelActionId,
+  sendChannelMessage,
+  splitChannelMessage,
+  splitChannelText,
+  validateChannelActions,
+} from "./messages.js";
 export type {
   Channel,
+  ChannelAction,
+  ChannelActionEvent,
+  ChannelActionStyle,
   ChannelAddress,
   ChannelAttachment,
   ChannelAttachmentData,
   ChannelAttachmentType,
   ChannelConversation,
   ChannelConversationKind,
+  ChannelCapabilities,
   ChannelEvent,
   ChannelEventHandler,
   ChannelMessage,

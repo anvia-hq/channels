@@ -1,6 +1,11 @@
-import type { ChannelConversationKind, ChannelMessageEvent } from "@anvia/channel";
+import type {
+  ChannelActionEvent,
+  ChannelConversationKind,
+  ChannelMessageEvent,
+} from "@anvia/channel";
+import { isChannelActionId } from "@anvia/channel";
 import { isSlackId, isSlackTimestamp } from "./identifiers.js";
-import type { SlackSocketMessage } from "./types.js";
+import type { SlackSocketAction, SlackSocketMessage } from "./types.js";
 
 export function normalizeSlackMessage(
   message: SlackSocketMessage,
@@ -38,6 +43,49 @@ export function normalizeSlackMessage(
       message.type === "app_mention" || message.text.includes(`<@${message.botUserId}>`),
     raw: message,
   };
+}
+
+export function normalizeSlackAction(
+  action: SlackSocketAction,
+): ChannelActionEvent<SlackSocketAction> | undefined {
+  if (!validSlackAction(action)) return undefined;
+  return {
+    type: "action",
+    id: action.eventId,
+    platform: "slack",
+    accountId: action.teamId,
+    conversation: {
+      id: action.channelId,
+      kind: conversationKind(action.channelType),
+      ...(action.threadTimestamp === undefined ? {} : { threadId: action.threadTimestamp }),
+    },
+    sender: {
+      id: action.senderId,
+      ...(action.senderDisplayName === undefined ? {} : { displayName: action.senderDisplayName }),
+      bot: false,
+    },
+    messageId: action.messageTimestamp,
+    actionId: action.actionId,
+    raw: action,
+  };
+}
+
+function validSlackAction(action: SlackSocketAction): boolean {
+  return (
+    action.type === "action" &&
+    typeof action.eventId === "string" &&
+    action.eventId.length > 0 &&
+    isSlackId(action.teamId) &&
+    isSlackId(action.channelId) &&
+    ["channel", "group", "im", "mpim", "app_home"].includes(action.channelType) &&
+    isSlackTimestamp(action.messageTimestamp) &&
+    (action.threadTimestamp === undefined || isSlackTimestamp(action.threadTimestamp)) &&
+    isSlackId(action.senderId) &&
+    (action.senderDisplayName === undefined || typeof action.senderDisplayName === "string") &&
+    isChannelActionId(action.actionId) &&
+    isSlackTimestamp(action.actionTimestamp) &&
+    isSlackId(action.botUserId)
+  );
 }
 
 function conversationKind(channelType: SlackSocketMessage["channelType"]): ChannelConversationKind {

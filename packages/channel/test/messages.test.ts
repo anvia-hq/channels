@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
-import { sendChannelMessage, splitChannelText } from "../src/index.js";
+import {
+  sendChannelMessage,
+  splitChannelMessage,
+  splitChannelText,
+  validateChannelActions,
+} from "../src/index.js";
 import type {
   Channel,
   ChannelAddress,
@@ -16,6 +21,38 @@ describe("channel message delivery", () => {
 
     expect(parts.every((part) => part.length <= 12)).toBe(true);
     expect(parts.join("")).toBe(text);
+  });
+
+  it("places actions only on the final split message", () => {
+    expect(
+      splitChannelMessage(
+        { text: "abcdefgh", actions: [{ id: "approve", label: "Approve", style: "primary" }] },
+        3,
+      ),
+    ).toEqual([
+      { text: "abc" },
+      { text: "def" },
+      { text: "gh", actions: [{ id: "approve", label: "Approve", style: "primary" }] },
+    ]);
+  });
+
+  it("validates the portable action limits", () => {
+    expect(() =>
+      validateChannelActions([
+        { id: "approve", label: "Approve" },
+        { id: "deny", label: "Deny", style: "danger" },
+      ]),
+    ).not.toThrow();
+    expect(() => validateChannelActions([])).toThrow("non-empty array");
+    expect(() =>
+      validateChannelActions([
+        { id: "same", label: "First" },
+        { id: "same", label: "Second" },
+      ]),
+    ).toThrow("must be unique");
+    expect(() => validateChannelActions([{ id: "x".repeat(65), label: "Too long" }])).toThrow(
+      "64 UTF-8 bytes",
+    );
   });
 
   it("does not split a surrogate pair", () => {

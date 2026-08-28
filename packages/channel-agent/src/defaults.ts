@@ -1,5 +1,5 @@
 import type { JsonObject, MemoryScope } from "@anvia/core";
-import type { ChannelMessageEvent } from "@anvia/channel";
+import type { ChannelEvent, ChannelMessageEvent } from "@anvia/channel";
 
 export function defaultShouldHandleChannelEvent(event: ChannelMessageEvent): boolean {
   return !event.sender.bot && (event.conversation.kind === "direct" || event.mentionedBot);
@@ -23,7 +23,7 @@ export function defaultChannelAgentSession(event: ChannelMessageEvent): MemorySc
   return channelConversationUserSession(event);
 }
 
-export function channelConversationKey(event: ChannelMessageEvent): string {
+export function channelConversationKey(event: ChannelEvent): string {
   return [
     "channel",
     encode(event.platform),

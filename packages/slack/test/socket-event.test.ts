@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseSlackSocketEvent } from "../src/index.js";
+import { parseSlackSocketEvent, parseSlackSocketInteraction } from "../src/index.js";
 
 const identity = { teamId: "T1", botUserId: "U2" };
 
@@ -145,6 +145,42 @@ describe("parseSlackSocketEvent", () => {
         identity,
       ),
     ).toBeUndefined();
+  });
+
+  it("runtime-validates interactive button callbacks", () => {
+    expect(
+      parseSlackSocketInteraction(
+        {
+          type: "block_actions",
+          trigger_id: "trigger-1",
+          team: { id: "T1" },
+          channel: { id: "C1", type: "channel" },
+          user: { id: "U1", name: "indra" },
+          message: { ts: "1700000001.000002", thread_ts: "1700000000.000001" },
+          actions: [
+            {
+              action_id: "button",
+              value: "anvia:token:approve",
+              action_ts: "1700000002.000003",
+            },
+          ],
+        },
+        identity,
+      ),
+    ).toEqual({
+      type: "action",
+      eventId: "trigger-1",
+      teamId: "T1",
+      channelId: "C1",
+      channelType: "channel",
+      messageTimestamp: "1700000001.000002",
+      threadTimestamp: "1700000000.000001",
+      senderId: "U1",
+      senderDisplayName: "indra",
+      actionId: "anvia:token:approve",
+      actionTimestamp: "1700000002.000003",
+      botUserId: "U2",
+    });
   });
 });
 

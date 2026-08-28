@@ -1,4 +1,4 @@
-import type { ChannelAttachmentData } from "@anvia/channel";
+import type { ChannelAttachmentData, ChannelMessage } from "@anvia/channel";
 
 export type SlackChannelType = "channel" | "group" | "im" | "mpim" | "app_home";
 
@@ -31,13 +31,30 @@ export type SlackSocketMessage = Readonly<{
   botUserId: string;
 }>;
 
+export type SlackSocketAction = Readonly<{
+  type: "action";
+  eventId: string;
+  teamId: string;
+  channelId: string;
+  channelType: SlackChannelType;
+  messageTimestamp: string;
+  threadTimestamp?: string;
+  senderId: string;
+  senderDisplayName?: string;
+  actionId: string;
+  actionTimestamp: string;
+  botUserId: string;
+}>;
+
+export type SlackSocketEvent = SlackSocketMessage | SlackSocketAction;
+
 export type SlackSentMessage = Readonly<{
   channelId: string;
   timestamp: string;
   threadTimestamp?: string;
 }>;
 
-export type SlackTransportHandler = (message: SlackSocketMessage) => Promise<void>;
+export type SlackTransportHandler = (event: SlackSocketEvent) => Promise<void>;
 
 export interface SlackTransport {
   start(handler: SlackTransportHandler): Promise<void>;
@@ -45,8 +62,8 @@ export interface SlackTransport {
   send(
     channelId: string,
     threadTimestamp: string | undefined,
-    text: string,
+    message: ChannelMessage,
   ): Promise<SlackSentMessage>;
-  edit(channelId: string, timestamp: string, text: string): Promise<void>;
+  edit(channelId: string, timestamp: string, message: ChannelMessage): Promise<void>;
   loadAttachment(file: SlackFile, signal?: AbortSignal): Promise<ChannelAttachmentData>;
 }

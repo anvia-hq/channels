@@ -8,7 +8,7 @@ import type {
   ChannelMessageEvent,
   SentChannelMessage,
 } from "@anvia/channel";
-import { splitChannelText } from "@anvia/channel";
+import { splitChannelMessage, validateChannelActions } from "@anvia/channel";
 import { TelegramApiError, createTelegramBotApiClient } from "./bot-api-client.js";
 import { normalizeTelegramUpdate } from "./normalize.js";
 import type { TelegramBotApi, TelegramUpdate, TelegramUser } from "./types.js";
@@ -59,6 +59,7 @@ export function telegram(options: TelegramChannelOptions): TelegramChannel {
 
 export class TelegramChannel implements Channel<TelegramUpdate> {
   readonly platform = "telegram";
+  readonly capabilities = { actions: true } as const;
 
   private readonly api: TelegramBotApi;
   private readonly polling: Required<TelegramPollingOptions>;
@@ -82,7 +83,7 @@ export class TelegramChannel implements Channel<TelegramUpdate> {
   }
 
   splitMessage(message: ChannelMessage): readonly ChannelMessage[] {
-    return splitChannelText(message.text, MAX_MESSAGE_LENGTH).map((text) => ({ text }));
+    return splitChannelMessage(message, MAX_MESSAGE_LENGTH);
   }
 
   loadAttachment(
@@ -131,6 +132,7 @@ export class TelegramChannel implements Channel<TelegramUpdate> {
       chat_id: chatId(address.conversationId),
       text: message.text,
       ...(threadId === undefined ? {} : { message_thread_id: threadId }),
+      ...telegramReplyMarkup(message),
     });
     return {
       id: String(sent.message_id),
@@ -154,6 +156,7 @@ export class TelegramChannel implements Channel<TelegramUpdate> {
       chat_id: chatId(sent.address.conversationId),
       message_id: positiveInteger(sent.id, "Telegram message ID"),
       text: message.text,
+      ...telegramReplyMarkup(message, true),
     });
   }
 
@@ -173,7 +176,7 @@ export class TelegramChannel implements Channel<TelegramUpdate> {
             ...(offset === undefined ? {} : { offset }),
             limit: this.polling.limit,
             timeout: this.polling.timeoutSeconds,
-            allowed_updates: ["message"],
+            allowed_updates: ["message", "callback_query"],
           },
           signal,
         );
@@ -192,6 +195,19 @@ export class TelegramChannel implements Channel<TelegramUpdate> {
           continue;
         }
 
+        if (update.callback_query !== undefined) {
+          try {
+            await this.api.answerCallbackQuery(
+              { callback_query_id: update.callback_query.id },
+              signal,
+            );
+          } catch (error) {
+            if (signal.aborted) break;
+            await this.reportError(error, { operation: "handle", update });
+            handlerFailed = true;
+            break;
+          }
+        }
         const event = normalizeTelegramUpdate(update, bot);
         if (event === undefined || event.sender.bot) {
           offset = nextOffset(offset, update.update_id);
@@ -256,6 +272,29 @@ function validateMessage(message: ChannelMessage): void {
   if (message.text.length > MAX_MESSAGE_LENGTH) {
     throw new RangeError(`Telegram message text must not exceed ${MAX_MESSAGE_LENGTH} characters`);
   }
+  validateChannelActions(message.actions);
+}
+
+function telegramReplyMarkup(
+  message: ChannelMessage,
+  editing = false,
+):
+  | Readonly<{
+      reply_markup: {
+        inline_keyboard: readonly (readonly { text: string; callback_data: string }[])[];
+      };
+    }>
+  | Record<string, never> {
+  if (message.actions === undefined) {
+    return editing ? { reply_markup: { inline_keyboard: [] } } : {};
+  }
+  return {
+    reply_markup: {
+      inline_keyboard: [
+        message.actions.map((action) => ({ text: action.label, callback_data: action.id })),
+      ],
+    },
+  };
 }
 
 function chatId(value: string): number | string {

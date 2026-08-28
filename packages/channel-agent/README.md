@@ -97,21 +97,37 @@ buffer the result and send only the final response.
 
 ## Questions and approvals
 
-Anvia tool questions and approvals are rendered as channel messages and resumed from the same
-sender's next handled reply. Group replies must still satisfy `shouldHandle` (a mention or reply to
-the bot by default), so an unrelated group message cannot satisfy an interaction. Approval replies
-accept `approve`, `deny`, `yes`, or `no`. The default approval prompt includes a bounded input
-preview and redacts common credential fields. Applications should provide `interactions.render`
-when tool-specific redaction or presentation is required. One question accepts a single reply;
-multiple questions accept one answer per line. Choice labels and values are both recognized.
+Anvia tool approvals and single-choice questions are rendered with native buttons when the adapter
+advertises action support. Button identifiers contain only an opaque nonce and response selector;
+continuations remain in the configured server-side store. Stale buttons and callbacks from another
+sender or conversation cannot resume the pending interaction.
+
+Text-only adapters retain the reply flow. Group replies must still satisfy `shouldHandle` (a
+mention or reply to the bot by default), so an unrelated group message cannot satisfy an
+interaction. Approval replies accept `approve`, `deny`, `yes`, or `no`. One question accepts a
+single reply; multiple questions accept one answer per line. Choice labels and values are both
+recognized. Free-text questions, multiple questions, and choices above the portable five-button
+limit also use text replies.
+
+The default approval prompt includes a bounded input preview and redacts common credential fields.
+Applications should provide `interactions.render` when tool-specific redaction or presentation is
+required. A custom renderer may return either a string or a `ChannelMessage`; default native
+actions are added when the returned message does not already contain actions.
 
 Pending continuations are held in a `MemoryChannelAgentInteractionStore` by default. Applications
 that must survive a process restart should provide a durable `interactions.store`; continuations
 must remain server-side and must not be sent to the platform. Rendering and response parsing are
-customizable through `interactions.render` and `interactions.parseResponse`. Set
-`interactions: false` to retain terminal, non-resumable rendering instead.
+customizable through `interactions.render`, `interactions.parseResponse`, and
+`interactions.parseAction`. Custom actions returned by a renderer must have a matching
+`parseAction` implementation. Set `interactions: false` to retain terminal, non-resumable rendering
+instead.
 Continuation stores and resumed tools do not provide exactly-once execution; make externally
 mutating tools idempotent when retries are possible.
+
+Interaction stores atomically `take(key, interactionId)` a continuation before resuming it. Durable
+implementations should use a transaction or compare-and-delete operation so two application
+instances cannot accept the same response concurrently. A failed resume restores the continuation
+for retry, so external tool side effects still require idempotency.
 
 ```ts
 const service = createChannelAgent({

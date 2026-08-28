@@ -1,5 +1,12 @@
+import { isChannelActionId } from "@anvia/channel";
 import { isSlackId, isSlackTimestamp } from "./identifiers.js";
-import type { SlackChannelType, SlackFile, SlackIdentity, SlackSocketMessage } from "./types.js";
+import type {
+  SlackChannelType,
+  SlackFile,
+  SlackIdentity,
+  SlackSocketAction,
+  SlackSocketMessage,
+} from "./types.js";
 
 export function parseSlackSocketEvent(
   body: unknown,
@@ -45,6 +52,53 @@ export function parseSlackSocketEvent(
       isSlackId(event.bot_id) || isSlackId(event.app_id) || senderId === identity.botUserId,
     text: event.text,
     files,
+    botUserId: identity.botUserId,
+  };
+}
+
+export function parseSlackSocketInteraction(
+  body: unknown,
+  identity: SlackIdentity,
+): SlackSocketAction | undefined {
+  if (!isRecord(body) || body.type !== "block_actions") return undefined;
+  const team = body.team;
+  const channel = body.channel;
+  const user = body.user;
+  const message = body.message;
+  const actions = body.actions;
+  if (
+    !isRecord(team) ||
+    !isSlackId(team.id) ||
+    !isRecord(channel) ||
+    !isSlackId(channel.id) ||
+    !isRecord(user) ||
+    !isSlackId(user.id) ||
+    !isRecord(message) ||
+    !isSlackTimestamp(message.ts) ||
+    !Array.isArray(actions) ||
+    actions.length !== 1 ||
+    !isRecord(actions[0]) ||
+    !isChannelActionId(actions[0].value) ||
+    !isSlackTimestamp(actions[0].action_ts)
+  ) {
+    return undefined;
+  }
+  const threadTimestamp = isSlackTimestamp(message.thread_ts) ? message.thread_ts : undefined;
+  const eventId = nonemptyString(body.trigger_id)
+    ? body.trigger_id
+    : `${message.ts}:${actions[0].action_ts}`;
+  return {
+    type: "action",
+    eventId,
+    teamId: team.id,
+    channelId: channel.id,
+    channelType: slackChannelType(channel.type, channel.id),
+    messageTimestamp: message.ts,
+    ...(threadTimestamp === undefined ? {} : { threadTimestamp }),
+    senderId: user.id,
+    ...(nonemptyString(user.name) ? { senderDisplayName: user.name } : {}),
+    actionId: actions[0].value,
+    actionTimestamp: actions[0].action_ts,
     botUserId: identity.botUserId,
   };
 }

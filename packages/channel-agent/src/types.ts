@@ -1,6 +1,12 @@
 import type { AgentOutcome, AgentPrompt, MemoryScope } from "@anvia/core";
 import type { AgentContinuation, AgentInteractionResponse } from "@anvia/core/agent/interactions";
-import type { Channel, ChannelMessageEvent } from "@anvia/channel";
+import type {
+  Channel,
+  ChannelActionEvent,
+  ChannelEvent,
+  ChannelMessage,
+  ChannelMessageEvent,
+} from "@anvia/channel";
 import type {
   ChannelAgentInteractionStore,
   PendingChannelAgentInteraction,
@@ -54,20 +60,25 @@ export type ChannelAgentPromptContext<RawEvent = unknown> = Readonly<{
 
 export type ChannelAgentErrorContext<RawEvent = unknown> = Readonly<{
   stage: "filter" | "prepare" | "interaction" | "agent" | "delivery";
-  event: ChannelMessageEvent<RawEvent>;
+  event: ChannelEvent<RawEvent>;
 }>;
 
 export type ChannelAgentInteractionOptions<RawEvent = unknown> = Readonly<{
   store?: ChannelAgentInteractionStore;
   render?: (
     pending: PendingChannelAgentInteraction,
-    event: ChannelMessageEvent<RawEvent>,
-  ) => string | Promise<string>;
+    event: ChannelEvent<RawEvent>,
+  ) => string | ChannelMessage | Promise<string | ChannelMessage>;
   parseResponse?: (
     event: ChannelMessageEvent<RawEvent>,
     pending: PendingChannelAgentInteraction,
   ) => AgentInteractionResponse | undefined | Promise<AgentInteractionResponse | undefined>;
+  parseAction?: (
+    event: ChannelActionEvent<RawEvent>,
+    pending: PendingChannelAgentInteraction,
+  ) => AgentInteractionResponse | undefined | Promise<AgentInteractionResponse | undefined>;
   invalidResponseMessage?: string;
+  expiredInteractionMessage?: string;
 }>;
 
 export type ChannelAgentOptions<RawEvent = unknown, Output = string> = Readonly<{
@@ -83,7 +94,7 @@ export type ChannelAgentOptions<RawEvent = unknown, Output = string> = Readonly<
   ) => MemoryScope | undefined | Promise<MemoryScope | undefined>;
   renderOutcome?: (
     outcome: AgentOutcome<Output>,
-    event: ChannelMessageEvent<RawEvent>,
+    event: ChannelEvent<RawEvent>,
   ) => string | Promise<string>;
   streaming?: ChannelAgentStreamingOptions;
   multimodal?: false | ChannelAgentMultimodalOptions;

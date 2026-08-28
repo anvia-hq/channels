@@ -49,6 +49,9 @@ mention behavior without subscribing the app to every workspace message. To rece
 channel traffic, add the applicable `message.channels`, `message.groups`, or `message.mpim` events
 and their history scopes.
 
+Enable **Interactivity & Shortcuts** for native message actions. Socket Mode acknowledges button
+payloads before application processing. Portable actions are rendered as Block Kit buttons.
+
 Socket envelopes are acknowledged before application processing and duplicate deliveries are
 suppressed by workspace, channel, and message timestamp. Slack threads map to `threadId`. Outbound
 Slack control mentions such as `<@U123>` and `<!channel>` are escaped so generated text cannot

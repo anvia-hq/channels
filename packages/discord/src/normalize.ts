@@ -1,6 +1,7 @@
-import type { ChannelMessageEvent } from "@anvia/channel";
+import type { ChannelActionEvent, ChannelMessageEvent } from "@anvia/channel";
+import { isChannelActionId } from "@anvia/channel";
 import { isDiscordSnowflake } from "./snowflake.js";
-import type { DiscordGatewayMessage } from "./types.js";
+import type { DiscordGatewayAction, DiscordGatewayMessage } from "./types.js";
 
 export function normalizeDiscordMessage(
   message: DiscordGatewayMessage,
@@ -47,6 +48,44 @@ export function normalizeDiscordMessage(
     }),
     mentionedBot: message.mentionedBot,
     raw: message,
+  };
+}
+
+export function normalizeDiscordAction(
+  action: DiscordGatewayAction,
+): ChannelActionEvent<DiscordGatewayAction> | undefined {
+  if (
+    !isDiscordSnowflake(action.id) ||
+    !isDiscordSnowflake(action.channelId) ||
+    (action.guildId !== undefined && !isDiscordSnowflake(action.guildId)) ||
+    (action.parentChannelId !== undefined && !isDiscordSnowflake(action.parentChannelId)) ||
+    !isDiscordSnowflake(action.messageId) ||
+    !isChannelActionId(action.actionId) ||
+    !validUser(action.user) ||
+    !validUser(action.bot) ||
+    typeof action.direct !== "boolean" ||
+    typeof action.thread !== "boolean"
+  ) {
+    return undefined;
+  }
+  return {
+    type: "action",
+    id: action.id,
+    platform: "discord",
+    accountId: action.bot.id,
+    conversation: {
+      id: action.parentChannelId ?? action.channelId,
+      kind: action.direct ? "direct" : "channel",
+      ...(action.thread ? { threadId: action.channelId } : {}),
+    },
+    sender: {
+      id: action.user.id,
+      displayName: action.user.globalName ?? action.user.username,
+      bot: action.user.bot,
+    },
+    messageId: action.messageId,
+    actionId: action.actionId,
+    raw: action,
   };
 }
 

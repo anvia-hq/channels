@@ -1,8 +1,9 @@
 import { SocketModeClient } from "@slack/socket-mode";
 import { WebClient } from "@slack/web-api";
-import type { ChannelAttachmentData } from "@anvia/channel";
+import { splitChannelText } from "@anvia/channel";
+import type { ChannelAttachmentData, ChannelMessage } from "@anvia/channel";
 import { isSlackId, isSlackTimestamp } from "./identifiers.js";
-import { parseSlackSocketEvent } from "./socket-event.js";
+import { parseSlackSocketEvent, parseSlackSocketInteraction } from "./socket-event.js";
 import type {
   SlackIdentity,
   SlackSentMessage,
@@ -18,9 +19,9 @@ export type SlackWebClient = Readonly<{
   postMessage(
     channelId: string,
     threadTimestamp: string | undefined,
-    text: string,
+    message: ChannelMessage,
   ): Promise<unknown>;
-  updateMessage(channelId: string, timestamp: string, text: string): Promise<unknown>;
+  updateMessage(channelId: string, timestamp: string, message: ChannelMessage): Promise<unknown>;
   downloadFile(
     url: string,
     maximumBytes: number,
@@ -124,18 +125,18 @@ export class SlackSocketTransport implements SlackTransport {
   async send(
     channelId: string,
     threadTimestamp: string | undefined,
-    text: string,
+    message: ChannelMessage,
   ): Promise<SlackSentMessage> {
     const response = await this.web.postMessage(
       channelId,
       threadTimestamp,
-      sanitizeSlackText(text),
+      sanitizeSlackMessage(message),
     );
     return sentMessage(response, threadTimestamp);
   }
 
-  async edit(channelId: string, timestamp: string, text: string): Promise<void> {
-    await this.web.updateMessage(channelId, timestamp, sanitizeSlackText(text));
+  async edit(channelId: string, timestamp: string, message: ChannelMessage): Promise<void> {
+    await this.web.updateMessage(channelId, timestamp, sanitizeSlackMessage(message));
   }
 
   async loadAttachment(
@@ -164,14 +165,20 @@ export class SlackSocketTransport implements SlackTransport {
     const request = socketRequest(value);
     if (request === undefined) return;
     await request.ack();
-    if (request.type !== "events_api") return;
-
-    const message = parseSlackSocketEvent(request.body, identity);
-    if (message === undefined) return;
-    const key = `${message.teamId}:${message.channelId}:${message.timestamp}`;
+    const event =
+      request.type === "events_api"
+        ? parseSlackSocketEvent(request.body, identity)
+        : request.type === "interactive"
+          ? parseSlackSocketInteraction(request.body, identity)
+          : undefined;
+    if (event === undefined) return;
+    const key =
+      event.type === "action"
+        ? `${event.teamId}:${event.channelId}:${event.messageTimestamp}:${event.actionTimestamp}:${event.actionId}`
+        : `${event.teamId}:${event.channelId}:${event.timestamp}`;
     if (this.rememberedMessages.has(key)) return;
     remember(this.rememberedMessages, key);
-    await handler(message);
+    await handler(event);
   }
 
   private detachListeners(
@@ -220,22 +227,22 @@ function slackWebClient(
   const client = new WebClient(botToken);
   return {
     authenticate: () => client.auth.test(),
-    postMessage: (channelId, threadTimestamp, text) =>
+    postMessage: (channelId, threadTimestamp, message) =>
       client.chat.postMessage({
         channel: channelId,
-        text,
+        ...slackMessageBody(message),
         ...(threadTimestamp === undefined ? {} : { thread_ts: threadTimestamp }),
         link_names: false,
         unfurl_links: false,
         unfurl_media: false,
-      }),
-    updateMessage: (channelId, timestamp, text) =>
+      } as Parameters<typeof client.chat.postMessage>[0]),
+    updateMessage: (channelId, timestamp, message) =>
       client.chat.update({
         channel: channelId,
         ts: timestamp,
-        text,
+        ...slackMessageBody(message, true),
         link_names: false,
-      }),
+      } as Parameters<typeof client.chat.update>[0]),
     downloadFile: async (url, maximumBytes, signal) => {
       try {
         const response = await fetchImplementation(url, {
@@ -302,6 +309,42 @@ function sentMessage(value: unknown, fallbackThread: string | undefined): SlackS
 
 function sanitizeSlackText(text: string): string {
   return text.replace(/<([@#!])([^>\n]+)>/g, "&lt;$1$2&gt;");
+}
+
+function sanitizeSlackMessage(message: ChannelMessage): ChannelMessage {
+  return {
+    text: sanitizeSlackText(message.text),
+    ...(message.actions === undefined ? {} : { actions: message.actions }),
+  };
+}
+
+export function slackMessageBody(
+  message: ChannelMessage,
+  editing = false,
+): Readonly<Record<string, unknown>> {
+  const actions = message.actions;
+  if (actions === undefined) return { text: message.text, ...(editing ? { blocks: [] } : {}) };
+  return {
+    text: message.text,
+    blocks: [
+      ...splitChannelText(message.text, 3_000).map((text) => ({
+        type: "section",
+        text: { type: "mrkdwn", text },
+      })),
+      {
+        type: "actions",
+        elements: actions.map((action) => ({
+          type: "button",
+          action_id: action.id,
+          value: action.id,
+          text: { type: "plain_text", text: action.label },
+          ...(action.style === undefined || action.style === "default"
+            ? {}
+            : { style: action.style }),
+        })),
+      },
+    ],
+  };
 }
 
 function validateToken(value: string, label: string): void {

@@ -25,6 +25,10 @@ publishing.
 Inbound images and files are normalized across Discord, Slack, and Telegram. `@anvia/channel-agent`
 loads them through the originating adapter and constructs an Anvia multimodal prompt automatically.
 
+Slack, Discord, and Telegram also render platform-neutral message actions as native buttons. Agent
+tool approvals and single-choice questions use those controls automatically while retaining a text
+reply fallback for custom adapters without action support.
+
 ## Proactive delivery
 
 Monitors, workers, and application services can send without starting an agent bridge. Use the

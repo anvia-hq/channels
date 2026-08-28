@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { SlackSocketTransport } from "../src/index.js";
 import type { SlackWebClient } from "../src/index.js";
+import { slackMessageBody } from "../src/slack-socket-transport.js";
 
 describe("SlackSocketTransport Web API delivery", () => {
   it("posts and edits thread messages while neutralizing Slack control mentions", async () => {
@@ -14,24 +15,43 @@ describe("SlackSocketTransport Web API delivery", () => {
     const transport = new SlackSocketTransport(tokens(), fake.web);
 
     await expect(
-      transport.send("C1", "1700000000.000001", "hello <@U1> <!channel> <https://example.com>"),
+      transport.send("C1", "1700000000.000001", {
+        text: "hello <@U1> <!channel> <https://example.com>",
+      }),
     ).resolves.toEqual({
       channelId: "C1",
       timestamp: "1700000001.000002",
       threadTimestamp: "1700000000.000001",
     });
-    expect(fake.postMessage).toHaveBeenCalledWith(
-      "C1",
-      "1700000000.000001",
-      "hello &lt;@U1&gt; &lt;!channel&gt; <https://example.com>",
-    );
+    expect(fake.postMessage).toHaveBeenCalledWith("C1", "1700000000.000001", {
+      text: "hello &lt;@U1&gt; &lt;!channel&gt; <https://example.com>",
+    });
 
-    await transport.edit("C1", "1700000001.000002", "updated <!here>");
-    expect(fake.updateMessage).toHaveBeenCalledWith(
-      "C1",
-      "1700000001.000002",
-      "updated &lt;!here&gt;",
-    );
+    await transport.edit("C1", "1700000001.000002", { text: "updated <!here>" });
+    expect(fake.updateMessage).toHaveBeenCalledWith("C1", "1700000001.000002", {
+      text: "updated &lt;!here&gt;",
+    });
+    expect(
+      slackMessageBody({
+        text: "Approve?",
+        actions: [
+          { id: "anvia:token:approve", label: "Approve", style: "primary" },
+          { id: "anvia:token:deny", label: "Deny", style: "danger" },
+        ],
+      }),
+    ).toMatchObject({
+      text: "Approve?",
+      blocks: [
+        { type: "section", text: { type: "mrkdwn", text: "Approve?" } },
+        {
+          type: "actions",
+          elements: [
+            expect.objectContaining({ action_id: "anvia:token:approve", style: "primary" }),
+            expect.objectContaining({ action_id: "anvia:token:deny", style: "danger" }),
+          ],
+        },
+      ],
+    });
   });
 
   it("rejects invalid API responses, identities, and tokens", async () => {
@@ -39,7 +59,7 @@ describe("SlackSocketTransport Web API delivery", () => {
     fake.postMessage.mockResolvedValue({ ok: true });
     const transport = new SlackSocketTransport(tokens(), fake.web);
 
-    await expect(transport.send("C1", undefined, "hello")).rejects.toThrow(
+    await expect(transport.send("C1", undefined, { text: "hello" })).rejects.toThrow(
       "chat.postMessage response is invalid",
     );
     fake.authenticate.mockResolvedValue({ ok: true });
@@ -48,6 +68,33 @@ describe("SlackSocketTransport Web API delivery", () => {
     );
     expect(() => new SlackSocketTransport({ appToken: "", botToken: "xoxb-test" })).toThrow(
       "app-level token must not be empty",
+    );
+  });
+
+  it("renders Block Kit actions with sanitized fallback text", async () => {
+    const fake = fakeWebClient();
+    fake.postMessage.mockResolvedValue({
+      ok: true,
+      channel: "C1",
+      ts: "1700000001.000002",
+    });
+    const transport = new SlackSocketTransport(tokens(), fake.web);
+
+    await transport.send("C1", undefined, {
+      text: "Approve <@U1>?",
+      actions: [
+        { id: "anvia:token:approve", label: "Approve", style: "primary" },
+        { id: "anvia:token:deny", label: "Deny", style: "danger" },
+      ],
+    });
+
+    expect(fake.postMessage).toHaveBeenCalledWith(
+      "C1",
+      undefined,
+      expect.objectContaining({
+        text: "Approve &lt;@U1&gt;?",
+        actions: expect.any(Array),
+      }),
     );
   });
 

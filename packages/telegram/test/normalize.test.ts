@@ -43,7 +43,8 @@ describe("normalizeTelegramUpdate", () => {
       ],
     });
 
-    expect(normalizeTelegramUpdate(update, bot)?.attachments).toEqual([
+    const event = normalizeTelegramUpdate(update, bot);
+    expect(event?.type === "message" ? event.attachments : undefined).toEqual([
       { id: "large", type: "image", mediaType: "image/jpeg", size: 100 },
     ]);
   });
@@ -81,8 +82,36 @@ describe("normalizeTelegramUpdate", () => {
       replyToBot: true,
     });
 
-    expect(normalizeTelegramUpdate(command, bot)?.mentionedBot).toBe(true);
-    expect(normalizeTelegramUpdate(reply, bot)?.mentionedBot).toBe(true);
+    const commandEvent = normalizeTelegramUpdate(command, bot);
+    const replyEvent = normalizeTelegramUpdate(reply, bot);
+    expect(commandEvent?.type === "message" && commandEvent.mentionedBot).toBe(true);
+    expect(replyEvent?.type === "message" && replyEvent.mentionedBot).toBe(true);
+  });
+
+  it("normalizes callback queries as action events", () => {
+    const update: TelegramUpdate = {
+      update_id: 15,
+      callback_query: {
+        id: "callback-1",
+        from: { id: 7, is_bot: false, first_name: "Indra" },
+        data: "anvia:token:approve",
+        message: {
+          message_id: 77,
+          message_thread_id: 9,
+          chat: { id: -100, type: "supergroup" },
+          text: "Approve?",
+        },
+      },
+    };
+
+    expect(normalizeTelegramUpdate(update, bot)).toMatchObject({
+      type: "action",
+      id: "15",
+      actionId: "anvia:token:approve",
+      messageId: "77",
+      conversation: { id: "-100", kind: "group", threadId: "9" },
+      sender: { id: "7", displayName: "Indra", bot: false },
+    });
   });
 
   it("ignores updates without text or a user sender", () => {

@@ -32,7 +32,7 @@ describe("TelegramChannel", () => {
     expect(fake.getUpdates.mock.calls[0]?.[0]).toEqual({
       limit: 100,
       timeout: 30,
-      allowed_updates: ["message"],
+      allowed_updates: ["message", "callback_query"],
     });
     expect(fake.getUpdates.mock.calls[1]?.[0]).toMatchObject({ offset: 11 });
 
@@ -145,7 +145,62 @@ describe("TelegramChannel", () => {
       chat_id: -100,
       message_id: 77,
       text: "resolved",
+      reply_markup: { inline_keyboard: [] },
     });
+  });
+
+  it("renders inline actions and acknowledges callbacks before dispatch", async () => {
+    const fake = fakeApi();
+    const update: TelegramUpdate = {
+      update_id: 20,
+      callback_query: {
+        id: "callback-1",
+        from: { id: 7, is_bot: false, first_name: "Indra" },
+        data: "anvia:token:approve",
+        message: {
+          message_id: 77,
+          chat: { id: -100, type: "supergroup" },
+          text: "Approve?",
+        },
+      },
+    };
+    fake.getUpdates.mockResolvedValueOnce([update]).mockImplementation(waitForAbort);
+    const handler = vi.fn(async () => undefined);
+    const channel = telegram({ api: fake.api });
+
+    await channel.send(
+      { platform: "telegram", conversationId: "-100" },
+      {
+        text: "Approve?",
+        actions: [
+          { id: "anvia:token:approve", label: "Approve", style: "primary" },
+          { id: "anvia:token:deny", label: "Deny", style: "danger" },
+        ],
+      },
+    );
+    expect(fake.sendMessage).toHaveBeenCalledWith({
+      chat_id: -100,
+      text: "Approve?",
+      reply_markup: {
+        inline_keyboard: [
+          [
+            { text: "Approve", callback_data: "anvia:token:approve" },
+            { text: "Deny", callback_data: "anvia:token:deny" },
+          ],
+        ],
+      },
+    });
+
+    await channel.start(handler);
+    await vi.waitFor(() => expect(handler).toHaveBeenCalledOnce());
+    expect(fake.answerCallbackQuery).toHaveBeenCalledWith(
+      { callback_query_id: "callback-1" },
+      expect.any(AbortSignal),
+    );
+    expect(handler).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "action", actionId: "anvia:token:approve" }),
+    );
+    await channel.stop();
   });
 
   it("loads Telegram media through the authenticated Bot API", async () => {
@@ -161,7 +216,7 @@ describe("TelegramChannel", () => {
       },
     };
     const event = normalizeTelegramUpdate(update, bot);
-    if (event === undefined || event.attachments[0] === undefined) {
+    if (event?.type !== "message" || event.attachments[0] === undefined) {
       throw new Error("Expected a normalized attachment");
     }
 
@@ -203,6 +258,7 @@ type FakeApi = Readonly<{
   getUpdates: ReturnType<typeof vi.fn<TelegramBotApi["getUpdates"]>>;
   sendMessage: ReturnType<typeof vi.fn<TelegramBotApi["sendMessage"]>>;
   editMessageText: ReturnType<typeof vi.fn<TelegramBotApi["editMessageText"]>>;
+  answerCallbackQuery: ReturnType<typeof vi.fn<TelegramBotApi["answerCallbackQuery"]>>;
   downloadFile: ReturnType<typeof vi.fn<TelegramBotApi["downloadFile"]>>;
 }>;
 
@@ -215,16 +271,20 @@ function fakeApi(): FakeApi {
   const editMessageText = vi
     .fn<TelegramBotApi["editMessageText"]>()
     .mockResolvedValue(sentTelegramMessage());
+  const answerCallbackQuery = vi
+    .fn<TelegramBotApi["answerCallbackQuery"]>()
+    .mockResolvedValue(true);
   const downloadFile = vi.fn<TelegramBotApi["downloadFile"]>().mockResolvedValue({
     type: "data",
     data: "ZmFrZQ==",
   });
   return {
-    api: { getMe, getUpdates, sendMessage, editMessageText, downloadFile },
+    api: { getMe, getUpdates, sendMessage, editMessageText, answerCallbackQuery, downloadFile },
     getMe,
     getUpdates,
     sendMessage,
     editMessageText,
+    answerCallbackQuery,
     downloadFile,
   };
 }

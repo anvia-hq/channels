@@ -1,5 +1,10 @@
 import { vi } from "vitest";
-import type { DiscordGateway, DiscordGatewayHandler, DiscordGatewayMessage } from "../src/index.js";
+import type {
+  DiscordGateway,
+  DiscordGatewayEvent,
+  DiscordGatewayHandler,
+  DiscordGatewayMessage,
+} from "../src/index.js";
 
 export type FakeDiscordGateway = Readonly<{
   gateway: DiscordGateway;
@@ -7,7 +12,7 @@ export type FakeDiscordGateway = Readonly<{
   stop: ReturnType<typeof vi.fn<DiscordGateway["stop"]>>;
   send: ReturnType<typeof vi.fn<DiscordGateway["send"]>>;
   edit: ReturnType<typeof vi.fn<DiscordGateway["edit"]>>;
-  emit(message: DiscordGatewayMessage): Promise<void>;
+  emit(event: DiscordGatewayEvent): Promise<void>;
 }>;
 
 export function fakeGateway(): FakeDiscordGateway {
@@ -61,5 +66,6 @@ export function discordMessage(
     system: false,
     mentionedBot: true,
     ...overrides,
+    type: "message",
   };
 }

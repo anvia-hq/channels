@@ -1,3 +1,5 @@
+import type { ChannelMessage } from "@anvia/channel";
+
 export type DiscordGatewayUser = Readonly<{
   id: string;
   username: string;
@@ -14,6 +16,7 @@ export type DiscordGatewayAttachment = Readonly<{
 }>;
 
 export type DiscordGatewayMessage = Readonly<{
+  type: "message";
   id: string;
   channelId: string;
   guildId?: string;
@@ -29,16 +32,32 @@ export type DiscordGatewayMessage = Readonly<{
   mentionedBot: boolean;
 }>;
 
+export type DiscordGatewayAction = Readonly<{
+  type: "action";
+  id: string;
+  channelId: string;
+  guildId?: string;
+  parentChannelId?: string;
+  messageId: string;
+  actionId: string;
+  user: DiscordGatewayUser;
+  bot: DiscordGatewayUser;
+  direct: boolean;
+  thread: boolean;
+}>;
+
+export type DiscordGatewayEvent = DiscordGatewayMessage | DiscordGatewayAction;
+
 export type DiscordGatewaySentMessage = Readonly<{
   id: string;
   channelId: string;
 }>;
 
-export type DiscordGatewayHandler = (message: DiscordGatewayMessage) => Promise<void>;
+export type DiscordGatewayHandler = (event: DiscordGatewayEvent) => Promise<void>;
 
 export interface DiscordGateway {
   start(handler: DiscordGatewayHandler): Promise<void>;
   stop(): Promise<void>;
-  send(channelId: string, text: string): Promise<DiscordGatewaySentMessage>;
-  edit(channelId: string, messageId: string, text: string): Promise<void>;
+  send(channelId: string, message: ChannelMessage): Promise<DiscordGatewaySentMessage>;
+  edit(channelId: string, messageId: string, message: ChannelMessage): Promise<void>;
 }

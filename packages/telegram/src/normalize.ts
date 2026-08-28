@@ -1,4 +1,10 @@
-import type { ChannelConversationKind, ChannelMessageEvent } from "@anvia/channel";
+import type {
+  ChannelActionEvent,
+  ChannelConversationKind,
+  ChannelEvent,
+  ChannelMessageEvent,
+} from "@anvia/channel";
+import { isChannelActionId } from "@anvia/channel";
 import type {
   TelegramChatType,
   TelegramMessageEntity,
@@ -9,7 +15,8 @@ import type {
 export function normalizeTelegramUpdate(
   update: TelegramUpdate,
   bot: TelegramUser,
-): ChannelMessageEvent<TelegramUpdate> | undefined {
+): ChannelEvent<TelegramUpdate> | undefined {
+  if (update.callback_query !== undefined) return normalizeTelegramAction(update, bot);
   const message = update.message;
   if (message === undefined || message.from === undefined) return undefined;
   const text = message.text ?? message.caption ?? "";
@@ -37,6 +44,38 @@ export function normalizeTelegramUpdate(
     mentionedBot:
       mentionsBot(text, message.entities ?? message.caption_entities ?? [], bot) ||
       message.reply_to_message?.from?.id === bot.id,
+    raw: update,
+  };
+}
+
+function normalizeTelegramAction(
+  update: TelegramUpdate,
+  bot: TelegramUser,
+): ChannelActionEvent<TelegramUpdate> | undefined {
+  const query = update.callback_query;
+  const message = query?.message;
+  if (query === undefined || message === undefined || !isChannelActionId(query.data)) {
+    return undefined;
+  }
+  return {
+    type: "action",
+    id: String(update.update_id),
+    platform: "telegram",
+    accountId: String(bot.id),
+    conversation: {
+      id: String(message.chat.id),
+      kind: conversationKind(message.chat.type),
+      ...(message.message_thread_id === undefined
+        ? {}
+        : { threadId: String(message.message_thread_id) }),
+    },
+    sender: {
+      id: String(query.from.id),
+      displayName: displayName(query.from),
+      bot: query.from.is_bot,
+    },
+    messageId: String(message.message_id),
+    actionId: query.data,
     raw: update,
   };
 }

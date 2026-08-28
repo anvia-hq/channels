@@ -37,6 +37,35 @@ describe("DiscordChannel", () => {
     await channel.stop();
   });
 
+  it("dispatches normalized button actions", async () => {
+    const fake = fakeGateway();
+    const handler = vi.fn<(event: unknown) => Promise<void>>(async () => undefined);
+    const channel = discord({ gateway: fake.gateway });
+    await channel.start(handler);
+
+    await fake.emit({
+      type: "action",
+      id: "90",
+      channelId: "20",
+      guildId: "30",
+      messageId: "77",
+      actionId: "anvia:token:approve",
+      user: { id: "40", username: "indra", bot: false },
+      bot: { id: "50", username: "anvia", bot: true },
+      direct: false,
+      thread: false,
+    });
+
+    expect(handler).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "action",
+        messageId: "77",
+        actionId: "anvia:token:approve",
+      }),
+    );
+    await channel.stop();
+  });
+
   it("reports handler errors and continues receiving messages", async () => {
     const fake = fakeGateway();
     const handlerError = new Error("temporary failure");
@@ -55,7 +84,7 @@ describe("DiscordChannel", () => {
     expect(handler).toHaveBeenCalledTimes(2);
     expect(onError).toHaveBeenCalledWith(handlerError, {
       operation: "handle",
-      message: first,
+      event: first,
     });
     await channel.stop();
   });
@@ -73,7 +102,7 @@ describe("DiscordChannel", () => {
       { text: "alert" },
     );
 
-    expect(fake.send).toHaveBeenCalledWith("21", "alert");
+    expect(fake.send).toHaveBeenCalledWith("21", { text: "alert" });
     expect(sent).toEqual({
       id: "77",
       address: {
@@ -85,7 +114,7 @@ describe("DiscordChannel", () => {
     });
 
     await channel.edit(sent, { text: "resolved" });
-    expect(fake.edit).toHaveBeenCalledWith("21", "77", "resolved");
+    expect(fake.edit).toHaveBeenCalledWith("21", "77", { text: "resolved" });
   });
 
   it("resolves normalized attachments to Discord CDN URLs", async () => {

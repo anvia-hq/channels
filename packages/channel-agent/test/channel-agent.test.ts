@@ -9,6 +9,7 @@ import {
 import type { ChannelAgentExecutor, ChannelAgentRunInput } from "../src/index.js";
 import {
   FakeChannel,
+  actionEvent,
   agentApproval,
   agentResponse,
   deferred,
@@ -178,6 +179,10 @@ describe("ChannelAgentService", () => {
     await channel.emit(messageEvent({ id: "event-3", text: "approve" }));
 
     expect(channel.sent[0]?.message.text).toContain('Approve tool "send_email"?');
+    expect(channel.sent[0]?.message.actions?.map((action) => action.label)).toEqual([
+      "Approve",
+      "Deny",
+    ]);
     expect(channel.sent[0]?.message.text).toContain('Reply "approve" or "deny".');
     expect(channel.sent[1]?.message.text).toContain("couldn't understand");
     expect(resume).toHaveBeenCalledWith(
@@ -186,6 +191,105 @@ describe("ChannelAgentService", () => {
       { abortSignal: expect.any(AbortSignal) },
     );
     expect(channel.sent.at(-1)?.message.text).toBe("Email sent.");
+    await service.stop();
+  });
+
+  it("resumes native actions once and rejects duplicate callbacks", async () => {
+    const channel = new FakeChannel();
+    const generate = vi.fn<ChannelAgentExecutor["generate"]>().mockResolvedValue(agentApproval());
+    const resume = vi
+      .fn<NonNullable<ChannelAgentExecutor["resume"]>>()
+      .mockResolvedValue(agentResponse("Email sent."));
+    const service = await serveChannelAgent({
+      channel,
+      agent: { ...fakeAgent({ generate, streaming: false }), resume },
+      streaming: { placeholder: false },
+    });
+
+    await channel.emit(messageEvent());
+    const approve = channel.sent[0]?.message.actions?.find((action) => action.label === "Approve");
+    if (approve === undefined) throw new Error("Expected a native approval action");
+
+    await channel.emit(actionEvent(approve.id));
+    await channel.emit(actionEvent(approve.id, { id: "action-event-2" }));
+
+    expect(resume).toHaveBeenCalledOnce();
+    expect(resume).toHaveBeenCalledWith(
+      expect.objectContaining({ sourceRunId: "run-1" }),
+      { type: "tool-approval", approved: true },
+      { abortSignal: expect.any(AbortSignal) },
+    );
+    expect(channel.sent.map((item) => item.message.text)).toEqual([
+      expect.stringContaining('Approve tool "send_email"?'),
+      "Email sent.",
+      "This interaction is no longer active.",
+    ]);
+    await service.stop();
+  });
+
+  it("resumes custom rendered actions through the configured action parser", async () => {
+    const channel = new FakeChannel();
+    const generate = vi.fn<ChannelAgentExecutor["generate"]>().mockResolvedValue(agentApproval());
+    const resume = vi
+      .fn<NonNullable<ChannelAgentExecutor["resume"]>>()
+      .mockResolvedValue(agentResponse("Custom action accepted."));
+    const parseAction = vi.fn(() => ({ type: "tool-approval" as const, approved: true }));
+    const service = await serveChannelAgent({
+      channel,
+      agent: { ...fakeAgent({ generate, streaming: false }), resume },
+      interactions: {
+        render: () => ({
+          text: "Allow this custom action?",
+          actions: [{ id: "custom:allow", label: "Allow", style: "primary" }],
+        }),
+        parseAction,
+      },
+      streaming: { placeholder: false },
+    });
+
+    await channel.emit(messageEvent());
+    await channel.emit(actionEvent("custom:allow"));
+
+    expect(channel.sent[0]?.message.actions).toEqual([
+      { id: "custom:allow", label: "Allow", style: "primary" },
+    ]);
+    expect(parseAction).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "action", actionId: "custom:allow" }),
+      expect.objectContaining({ interaction: expect.objectContaining({ id: "interaction-1" }) }),
+    );
+    expect(resume).toHaveBeenCalledWith(
+      expect.objectContaining({ sourceRunId: "run-1" }),
+      { type: "tool-approval", approved: true },
+      { abortSignal: expect.any(AbortSignal) },
+    );
+    expect(channel.sent.at(-1)?.message.text).toBe("Custom action accepted.");
+    await service.stop();
+  });
+
+  it("keeps text-only custom adapters on the reply fallback", async () => {
+    const channel = new FakeChannel(Number.MAX_SAFE_INTEGER, false);
+    const onError = vi.fn();
+    const resume = vi
+      .fn<NonNullable<ChannelAgentExecutor["resume"]>>()
+      .mockResolvedValue(agentResponse("done"));
+    const service = await serveChannelAgent({
+      channel,
+      agent: {
+        ...fakeAgent({
+          generate: vi.fn<ChannelAgentExecutor["generate"]>().mockResolvedValue(agentApproval()),
+          streaming: false,
+        }),
+        resume,
+      },
+      streaming: { placeholder: false },
+      onError,
+    });
+
+    await channel.emit(messageEvent());
+
+    expect(channel.sent[0]?.message.actions).toBeUndefined();
+    expect(onError).not.toHaveBeenCalled();
+    expect(channel.sent[0]?.message.text).toContain('Reply "approve" or "deny".');
     await service.stop();
   });
 

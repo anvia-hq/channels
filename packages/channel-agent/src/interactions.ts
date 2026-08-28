@@ -3,7 +3,13 @@ import type {
   AgentInteractionRequest,
   AgentInteractionResponse,
 } from "@anvia/core/agent/interactions";
-import type { ChannelMessageEvent } from "@anvia/channel";
+import type {
+  ChannelAction,
+  ChannelActionEvent,
+  ChannelEvent,
+  ChannelMessageEvent,
+} from "@anvia/channel";
+import { MAX_CHANNEL_ACTION_LABEL_LENGTH } from "@anvia/channel";
 import { channelConversationKey } from "./defaults.js";
 
 const MAX_APPROVAL_INPUT_PREVIEW_LENGTH = 1_000;
@@ -12,6 +18,8 @@ const REDACTED_VALUE = "[redacted]";
 export type PendingChannelAgentInteraction = Readonly<{
   continuation: AgentContinuation;
   interaction: AgentInteractionRequest;
+  /** Opaque nonce used to reject callbacks from older interaction messages. */
+  actionToken?: string;
 }>;
 
 export interface ChannelAgentInteractionStore {
@@ -22,7 +30,13 @@ export interface ChannelAgentInteractionStore {
     | undefined
     | Promise<PendingChannelAgentInteraction | undefined>;
   set(key: string, pending: PendingChannelAgentInteraction): void | Promise<void>;
-  delete(key: string): void | Promise<void>;
+  take(
+    key: string,
+    interactionId: string,
+  ):
+    | PendingChannelAgentInteraction
+    | undefined
+    | Promise<PendingChannelAgentInteraction | undefined>;
 }
 
 export class MemoryChannelAgentInteractionStore implements ChannelAgentInteractionStore {
@@ -36,13 +50,79 @@ export class MemoryChannelAgentInteractionStore implements ChannelAgentInteracti
     this.pending.set(key, pending);
   }
 
-  delete(key: string): void {
+  take(key: string, interactionId: string): PendingChannelAgentInteraction | undefined {
+    const pending = this.pending.get(key);
+    if (pending === undefined || pending.interaction.id !== interactionId) return undefined;
     this.pending.delete(key);
+    return pending;
   }
 }
 
-export function channelInteractionKey(event: ChannelMessageEvent): string {
+export function channelInteractionKey(event: ChannelEvent): string {
   return JSON.stringify([channelConversationKey(event), event.sender.id]);
+}
+
+export function channelInteractionActions(
+  pending: PendingChannelAgentInteraction,
+): readonly ChannelAction[] | undefined {
+  const token = pending.actionToken;
+  if (token === undefined) return undefined;
+  if (pending.interaction.type === "tool-approval") {
+    return [
+      { id: actionId(token, "approve"), label: "Approve", style: "primary" },
+      { id: actionId(token, "deny"), label: "Deny", style: "danger" },
+    ];
+  }
+  const questions = pending.interaction.questions;
+  const question = questions.length === 1 ? questions[0] : undefined;
+  if (
+    question?.choices === undefined ||
+    question.choices.length === 0 ||
+    question.choices.length > 5 ||
+    question.choices.some(
+      (choice) =>
+        choice.label.length === 0 || choice.label.length > MAX_CHANNEL_ACTION_LABEL_LENGTH,
+    )
+  ) {
+    return undefined;
+  }
+  return question.choices.map((choice, index) => ({
+    id: actionId(token, `choice:${index}`),
+    label: choice.label,
+  }));
+}
+
+export function parseChannelAgentActionResponse(
+  event: ChannelActionEvent,
+  pending: PendingChannelAgentInteraction,
+): AgentInteractionResponse | undefined {
+  const token = pending.actionToken;
+  if (token === undefined) return undefined;
+  if (pending.interaction.type === "tool-approval") {
+    if (event.actionId === actionId(token, "approve")) {
+      return { type: "tool-approval", approved: true };
+    }
+    if (event.actionId === actionId(token, "deny")) {
+      return { type: "tool-approval", approved: false };
+    }
+    return undefined;
+  }
+  const question =
+    pending.interaction.questions.length === 1 ? pending.interaction.questions[0] : undefined;
+  if (question?.choices === undefined) return undefined;
+  for (const [index, choice] of question.choices.entries()) {
+    if (event.actionId === actionId(token, `choice:${index}`)) {
+      return {
+        type: "tool-question",
+        answers: [{ questionId: question.id, value: choice.value }],
+      };
+    }
+  }
+  return undefined;
+}
+
+function actionId(token: string, value: string): string {
+  return `anvia:${token}:${value}`;
 }
 
 export function renderChannelAgentInteraction(pending: PendingChannelAgentInteraction): string {

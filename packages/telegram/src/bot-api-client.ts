@@ -1,5 +1,6 @@
 import type {
   TelegramBotApi,
+  TelegramCallbackQuery,
   TelegramChat,
   TelegramMediaFile,
   TelegramMessage,
@@ -124,6 +125,14 @@ export function createTelegramBotApiClient(options: TelegramBotApiClientOptions)
       return telegramMessage(result, "editMessageText result");
     },
 
+    async answerCallbackQuery(request, signal) {
+      const result = await call("answerCallbackQuery", request, signal);
+      if (result !== true) {
+        throw new TelegramApiError("answerCallbackQuery", "result was not true");
+      }
+      return true;
+    },
+
     async downloadFile(fileId, signal) {
       if (typeof fileId !== "string" || fileId.length === 0) {
         throw new TypeError("Telegram file ID must not be empty");
@@ -232,8 +241,37 @@ function responseRetryAfter(value: unknown): number | undefined {
 function telegramUpdate(value: unknown, label: string): TelegramUpdate {
   const raw = object(value, label);
   const updateId = integer(raw.update_id, `${label}.update_id`);
-  if (raw.message === undefined) return { update_id: updateId };
-  return { update_id: updateId, message: telegramMessage(raw.message, `${label}.message`) };
+  const result: {
+    update_id: number;
+    message?: TelegramMessage;
+    callback_query?: TelegramCallbackQuery;
+  } = {
+    update_id: updateId,
+  };
+  if (raw.message !== undefined) {
+    result.message = telegramMessage(raw.message, `${label}.message`);
+  }
+  if (raw.callback_query !== undefined) {
+    result.callback_query = telegramCallbackQuery(raw.callback_query, `${label}.callback_query`);
+  }
+  return result;
+}
+
+function telegramCallbackQuery(value: unknown, label: string): TelegramCallbackQuery {
+  const raw = object(value, label);
+  const result: {
+    id: string;
+    from: TelegramUser;
+    message?: TelegramMessage;
+    data?: string;
+  } = {
+    id: nonemptyString(raw.id, `${label}.id`),
+    from: telegramUser(raw.from, `${label}.from`),
+  };
+  if (raw.message !== undefined) result.message = telegramMessage(raw.message, `${label}.message`);
+  const data = optionalString(raw.data);
+  if (data !== undefined) result.data = data;
+  return result;
 }
 
 function telegramMessage(value: unknown, label: string): TelegramMessage {

@@ -42,5 +42,7 @@ the attachment; the token-bearing Telegram download URL is never exposed to the 
 are stream-capped to 20 MiB by default; set `maximumAttachmentBytes` on `telegram(...)` to choose a
 different application limit. Messages sent by bots and unsupported updates are acknowledged
 without invoking the handler.
+Portable message actions are rendered as inline keyboards. Callback queries are acknowledged
+before application processing and normalized as action events.
 `sendChannelMessage` splits long text into ordered messages at Telegram's boundary; `channel.send`
 sends one atomic message and rejects oversized text.

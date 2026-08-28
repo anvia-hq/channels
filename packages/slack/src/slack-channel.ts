@@ -8,17 +8,17 @@ import type {
   ChannelMessageEvent,
   SentChannelMessage,
 } from "@anvia/channel";
-import { splitChannelText } from "@anvia/channel";
+import { splitChannelMessage, validateChannelActions } from "@anvia/channel";
 import { validateSlackId, validateSlackTimestamp } from "./identifiers.js";
-import { normalizeSlackMessage } from "./normalize.js";
+import { normalizeSlackAction, normalizeSlackMessage } from "./normalize.js";
 import { SlackSocketTransport } from "./slack-socket-transport.js";
-import type { SlackSocketMessage, SlackTransport } from "./types.js";
+import type { SlackSocketEvent, SlackTransport } from "./types.js";
 
 const MAX_MESSAGE_LENGTH = 4_000;
 
 export type SlackChannelErrorContext = Readonly<{
   operation: "socket" | "handle";
-  message?: SlackSocketMessage;
+  event?: SlackSocketEvent;
 }>;
 
 type SlackChannelCommonOptions = Readonly<{
@@ -47,8 +47,9 @@ export function slack(options: SlackChannelOptions): SlackChannel {
   return new SlackChannel(options);
 }
 
-export class SlackChannel implements Channel<SlackSocketMessage> {
+export class SlackChannel implements Channel<SlackSocketEvent> {
   readonly platform = "slack";
+  readonly capabilities = { actions: true } as const;
 
   private readonly transport: SlackTransport;
   private readonly onError: SlackChannelCommonOptions["onError"];
@@ -70,33 +71,35 @@ export class SlackChannel implements Channel<SlackSocketMessage> {
   }
 
   splitMessage(message: ChannelMessage): readonly ChannelMessage[] {
-    return splitChannelText(message.text, MAX_MESSAGE_LENGTH).map((text) => ({ text }));
+    return splitChannelMessage(message, MAX_MESSAGE_LENGTH);
   }
 
   async loadAttachment(
-    event: ChannelMessageEvent<SlackSocketMessage>,
+    event: ChannelMessageEvent<SlackSocketEvent>,
     attachment: ChannelAttachment,
     signal?: AbortSignal,
   ): Promise<ChannelAttachmentData> {
+    if (event.raw.type === "action") throw new TypeError("Slack message raw event is invalid");
     const file = event.raw.files.find((candidate) => candidate.id === attachment.id);
     if (file === undefined) throw new Error(`Slack attachment ${attachment.id} is unavailable`);
     return this.transport.loadAttachment(file, signal);
   }
 
-  async start(handler: ChannelEventHandler<SlackSocketMessage>): Promise<void> {
+  async start(handler: ChannelEventHandler<SlackSocketEvent>): Promise<void> {
     if (this.running) throw new Error("Slack channel is already running");
     if (typeof handler !== "function") throw new TypeError("Slack event handler is required");
     this.running = true;
 
     try {
-      await this.transport.start(async (message) => {
-        const event = normalizeSlackMessage(message);
+      await this.transport.start(async (source) => {
+        const event =
+          source.type === "action" ? normalizeSlackAction(source) : normalizeSlackMessage(source);
         if (event === undefined || event.sender.bot) return;
 
         try {
           await handler(event);
         } catch (error) {
-          await this.reportError(error, { operation: "handle", message });
+          await this.reportError(error, { operation: "handle", event: source });
         }
       });
     } catch (error) {
@@ -114,7 +117,7 @@ export class SlackChannel implements Channel<SlackSocketMessage> {
   async send(address: ChannelAddress, message: ChannelMessage): Promise<SentChannelMessage> {
     validateAddress(address);
     validateMessage(message);
-    const sent = await this.transport.send(address.conversationId, address.threadId, message.text);
+    const sent = await this.transport.send(address.conversationId, address.threadId, message);
 
     return {
       id: sent.timestamp,
@@ -131,7 +134,7 @@ export class SlackChannel implements Channel<SlackSocketMessage> {
     validateAddress(sent.address);
     validateSlackTimestamp(sent.id, "Slack message ID");
     validateMessage(message);
-    await this.transport.edit(sent.address.conversationId, sent.id, message.text);
+    await this.transport.edit(sent.address.conversationId, sent.id, message);
   }
 
   private async reportError(error: unknown, context: SlackChannelErrorContext): Promise<void> {
@@ -160,4 +163,5 @@ function validateMessage(message: ChannelMessage): void {
   if (message.text.length > MAX_MESSAGE_LENGTH) {
     throw new RangeError(`Slack message text must not exceed ${MAX_MESSAGE_LENGTH} characters`);
   }
+  validateChannelActions(message.actions);
 }

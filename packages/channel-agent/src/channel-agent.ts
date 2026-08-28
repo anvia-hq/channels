@@ -1,8 +1,11 @@
+import { randomUUID } from "node:crypto";
 import type { AgentOutcome, AgentPrompt, MemoryScope } from "@anvia/core";
 import type { AgentInteractionResponse } from "@anvia/core/agent/interactions";
 import { sendChannelMessage } from "@anvia/channel";
 import type {
+  ChannelActionEvent,
   ChannelAddress,
+  ChannelEvent,
   ChannelMessage,
   ChannelMessageEvent,
   SentChannelMessage,
@@ -15,7 +18,9 @@ import {
 import { KeyedQueue } from "./keyed-queue.js";
 import {
   MemoryChannelAgentInteractionStore,
+  channelInteractionActions,
   channelInteractionKey,
+  parseChannelAgentActionResponse,
   parseChannelAgentInteractionResponse,
   renderChannelAgentInteraction,
 } from "./interactions.js";
@@ -34,6 +39,7 @@ const DEFAULT_ERROR_MESSAGE = "Sorry, I couldn't process that message.";
 const DEFAULT_EMPTY_RESPONSE_MESSAGE = "I couldn't produce a response.";
 const DEFAULT_INVALID_INTERACTION_RESPONSE_MESSAGE =
   "I couldn't understand that response. Please follow the requested format.";
+const DEFAULT_EXPIRED_INTERACTION_MESSAGE = "This interaction is no longer active.";
 
 type ResolvedOptions<RawEvent, Output> = Readonly<{
   channel: ChannelAgentOptions<RawEvent, Output>["channel"];
@@ -55,7 +61,9 @@ type ResolvedOptions<RawEvent, Output> = Readonly<{
         store: NonNullable<ChannelAgentInteractionOptions<RawEvent>["store"]>;
         render: NonNullable<ChannelAgentInteractionOptions<RawEvent>["render"]>;
         parseResponse: NonNullable<ChannelAgentInteractionOptions<RawEvent>["parseResponse"]>;
+        parseAction: NonNullable<ChannelAgentInteractionOptions<RawEvent>["parseAction"]>;
         invalidResponseMessage: string;
+        expiredInteractionMessage: string;
       }>;
   onError: ChannelAgentOptions<RawEvent, Output>["onError"];
 }>;
@@ -107,8 +115,14 @@ export class ChannelAgentService<RawEvent = unknown, Output = string> {
     }
   }
 
-  private async accept(event: ChannelMessageEvent<RawEvent>, signal: AbortSignal): Promise<void> {
+  private async accept(event: ChannelEvent<RawEvent>, signal: AbortSignal): Promise<void> {
     if (signal.aborted) return;
+
+    if (event.type === "action") {
+      if (event.sender.bot) return;
+      await this.queue.run(channelConversationKey(event), () => this.processAction(event, signal));
+      return;
+    }
 
     let shouldHandle: boolean;
     try {
@@ -120,6 +134,37 @@ export class ChannelAgentService<RawEvent = unknown, Output = string> {
     if (!shouldHandle || signal.aborted) return;
 
     await this.queue.run(channelConversationKey(event), () => this.process(event, signal));
+  }
+
+  private async processAction(
+    event: ChannelActionEvent<RawEvent>,
+    signal: AbortSignal,
+  ): Promise<void> {
+    const interactions = this.options.interactions;
+    if (interactions === false || signal.aborted) return;
+    let pending: PendingChannelAgentInteraction | undefined;
+    try {
+      pending = await interactions.store.get(channelInteractionKey(event));
+    } catch (error) {
+      await this.handleFailure(error, "interaction", event, undefined, signal);
+      return;
+    }
+    if (pending === undefined) {
+      await this.deliverInteractionNotice(event, interactions.expiredInteractionMessage);
+      return;
+    }
+    let response: AgentInteractionResponse | undefined;
+    try {
+      response = await interactions.parseAction(event, pending);
+    } catch (error) {
+      await this.handleFailure(error, "interaction", event, undefined, signal);
+      return;
+    }
+    if (response === undefined) {
+      await this.deliverInteractionNotice(event, interactions.expiredInteractionMessage);
+      return;
+    }
+    await this.resumeInteraction(event, pending, response, signal);
   }
 
   private async process(event: ChannelMessageEvent<RawEvent>, signal: AbortSignal): Promise<void> {
@@ -218,13 +263,15 @@ export class ChannelAgentService<RawEvent = unknown, Output = string> {
   private async deliver(
     address: ChannelAddress,
     provisional: SentChannelMessage | undefined,
-    text: string,
+    response: string | ChannelMessage,
     deliveredText?: string,
   ): Promise<void> {
+    const message = typeof response === "string" ? { text: response } : response;
+    const text = message.text;
     if (text.length === 0) return;
-    const parts = this.messageParts({ text });
+    const parts = this.messageParts(message);
     if (provisional === undefined) {
-      await sendChannelMessage(this.options.channel, address, { text });
+      await sendChannelMessage(this.options.channel, address, message);
       return;
     }
     const first = parts[0];
@@ -238,12 +285,12 @@ export class ChannelAgentService<RawEvent = unknown, Output = string> {
 
   private async completeOutcome(
     outcome: AgentOutcome<Output>,
-    event: ChannelMessageEvent<RawEvent>,
+    event: ChannelEvent<RawEvent>,
     provisional: SentChannelMessage | undefined,
     signal: AbortSignal,
     deliveredText?: string,
   ): Promise<void> {
-    let response: string;
+    let response: ChannelMessage;
     try {
       if (outcome.type === "interaction" && this.options.interactions !== false) {
         if (this.options.agent.resume === undefined) {
@@ -252,14 +299,22 @@ export class ChannelAgentService<RawEvent = unknown, Output = string> {
         const pending = {
           continuation: outcome.continuation,
           interaction: outcome.interaction,
+          ...(this.options.channel.capabilities?.actions === true
+            ? { actionToken: randomUUID().replaceAll("-", "") }
+            : {}),
         };
         await this.options.interactions.store.set(channelInteractionKey(event), pending);
-        response = nonemptyResponse(
+        const rendered = responseMessage(
           await this.options.interactions.render(pending, event),
           this.options.emptyResponseMessage,
         );
+        const actions = channelInteractionActions(pending);
+        response =
+          actions === undefined || rendered.actions !== undefined
+            ? rendered
+            : { ...rendered, actions };
       } else {
-        response = nonemptyResponse(
+        response = responseMessage(
           await this.options.renderOutcome(outcome, event),
           this.options.emptyResponseMessage,
         );
@@ -302,6 +357,17 @@ export class ChannelAgentService<RawEvent = unknown, Output = string> {
       return;
     }
 
+    await this.resumeInteraction(event, pending, response, signal);
+  }
+
+  private async resumeInteraction(
+    event: ChannelMessageEvent<RawEvent> | ChannelActionEvent<RawEvent>,
+    pending: PendingChannelAgentInteraction,
+    response: AgentInteractionResponse,
+    signal: AbortSignal,
+  ): Promise<void> {
+    const interactions = this.options.interactions;
+    if (interactions === false) return;
     const resume = this.options.agent.resume?.bind(this.options.agent);
     if (resume === undefined) {
       await this.handleFailure(
@@ -314,36 +380,66 @@ export class ChannelAgentService<RawEvent = unknown, Output = string> {
       return;
     }
 
+    const key = channelInteractionKey(event);
+    let claimed: PendingChannelAgentInteraction | undefined;
+    try {
+      claimed = await interactions.store.take(key, pending.interaction.id);
+    } catch (error) {
+      await this.handleFailure(error, "interaction", event, undefined, signal);
+      return;
+    }
+    if (claimed === undefined) {
+      await this.deliverInteractionNotice(event, interactions.expiredInteractionMessage);
+      return;
+    }
+
     const address = eventAddress(event);
     const provisional = await this.sendPlaceholder(address, event);
-    if (provisional === null) return;
-    const key = channelInteractionKey(event);
+    if (provisional === null) {
+      await this.restoreInteraction(key, claimed, event);
+      return;
+    }
 
     let outcome: AgentOutcome<Output>;
     try {
-      outcome = await resume(pending.continuation, response, { abortSignal: signal });
+      outcome = await resume(claimed.continuation, response, { abortSignal: signal });
     } catch (error) {
+      await this.restoreInteraction(key, claimed, event);
       await this.handleFailure(error, "agent", event, provisional, signal);
       return;
     }
-
-    if (outcome.type === "interaction") {
-      await this.completeOutcome(outcome, event, provisional, signal);
-      return;
-    }
-    try {
-      await interactions.store.delete(key);
-    } catch (error) {
-      await this.handleFailure(error, "interaction", event, provisional, signal);
-      return;
-    }
-    if (signal.aborted) return;
+    if (signal.aborted && outcome.type !== "interaction") return;
     await this.completeOutcome(outcome, event, provisional, signal);
+  }
+
+  private async restoreInteraction(
+    key: string,
+    pending: PendingChannelAgentInteraction,
+    event: ChannelEvent<RawEvent>,
+  ): Promise<void> {
+    const interactions = this.options.interactions;
+    if (interactions === false) return;
+    try {
+      await interactions.store.set(key, pending);
+    } catch (error) {
+      await this.reportError(error, { stage: "interaction", event });
+    }
+  }
+
+  private async deliverInteractionNotice(
+    event: ChannelEvent<RawEvent>,
+    message: string,
+  ): Promise<void> {
+    try {
+      await this.deliver(eventAddress(event), undefined, message);
+    } catch (error) {
+      await this.reportError(error, { stage: "delivery", event });
+    }
   }
 
   private async sendPlaceholder(
     address: ChannelAddress,
-    event: ChannelMessageEvent<RawEvent>,
+    event: ChannelEvent<RawEvent>,
   ): Promise<SentChannelMessage | undefined | null> {
     const placeholder = this.options.streaming.placeholder;
     if (placeholder === false) return undefined;
@@ -368,7 +464,7 @@ export class ChannelAgentService<RawEvent = unknown, Output = string> {
   private async handleFailure(
     error: unknown,
     stage: ChannelAgentErrorContext<RawEvent>["stage"],
-    event: ChannelMessageEvent<RawEvent>,
+    event: ChannelEvent<RawEvent>,
     provisional: SentChannelMessage | undefined,
     signal: AbortSignal,
   ): Promise<void> {
@@ -457,11 +553,18 @@ function resolveInteractionOptions<RawEvent>(
   if (invalidResponseMessage.length === 0) {
     throw new TypeError("Channel agent invalid interaction response message must not be empty");
   }
+  const expiredInteractionMessage =
+    options?.expiredInteractionMessage ?? DEFAULT_EXPIRED_INTERACTION_MESSAGE;
+  if (expiredInteractionMessage.length === 0) {
+    throw new TypeError("Channel agent expired interaction message must not be empty");
+  }
   return {
     store: options?.store ?? new MemoryChannelAgentInteractionStore(),
     render: options?.render ?? renderChannelAgentInteraction,
     parseResponse: options?.parseResponse ?? parseChannelAgentInteractionResponse,
+    parseAction: options?.parseAction ?? parseChannelAgentActionResponse,
     invalidResponseMessage,
+    expiredInteractionMessage,
   };
 }
 
@@ -481,11 +584,12 @@ function defaultRenderOutcome<Output>(outcome: AgentOutcome<Output>): string {
   return "";
 }
 
-function nonemptyResponse(text: string, fallback: string): string {
-  return text.length === 0 ? fallback : text;
+function responseMessage(value: string | ChannelMessage, fallback: string): ChannelMessage {
+  const message = typeof value === "string" ? { text: value } : value;
+  return message.text.length === 0 ? { text: fallback } : message;
 }
 
-function eventAddress(event: ChannelMessageEvent): ChannelAddress {
+function eventAddress(event: ChannelEvent): ChannelAddress {
   return {
     platform: event.platform,
     ...(event.accountId === undefined ? {} : { accountId: event.accountId }),

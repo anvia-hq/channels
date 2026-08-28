@@ -1,5 +1,10 @@
 import { vi } from "vitest";
-import type { SlackSocketMessage, SlackTransport, SlackTransportHandler } from "../src/index.js";
+import type {
+  SlackSocketEvent,
+  SlackSocketMessage,
+  SlackTransport,
+  SlackTransportHandler,
+} from "../src/index.js";
 
 export type FakeSlackTransport = Readonly<{
   transport: SlackTransport;
@@ -8,7 +13,7 @@ export type FakeSlackTransport = Readonly<{
   send: ReturnType<typeof vi.fn<SlackTransport["send"]>>;
   edit: ReturnType<typeof vi.fn<SlackTransport["edit"]>>;
   loadAttachment: ReturnType<typeof vi.fn<SlackTransport["loadAttachment"]>>;
-  emit(message: SlackSocketMessage): Promise<void>;
+  emit(event: SlackSocketEvent): Promise<void>;
 }>;
 
 export function fakeTransport(): FakeSlackTransport {

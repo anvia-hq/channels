@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { normalizeDiscordMessage } from "../src/index.js";
+import { normalizeDiscordAction, normalizeDiscordMessage } from "../src/index.js";
 import { discordMessage } from "./helpers.js";
 
 describe("normalizeDiscordMessage", () => {
@@ -91,6 +91,48 @@ describe("normalizeDiscordMessage", () => {
     expect(normalizeDiscordMessage(discordMessage({ content: "" }))).toBeUndefined();
     expect(
       normalizeDiscordMessage(discordMessage({ channelId: "not-a-snowflake" })),
+    ).toBeUndefined();
+  });
+
+  it("normalizes button interactions in threads", () => {
+    expect(
+      normalizeDiscordAction({
+        type: "action",
+        id: "90",
+        channelId: "21",
+        guildId: "30",
+        parentChannelId: "20",
+        messageId: "77",
+        actionId: "anvia:token:approve",
+        user: { id: "40", username: "indra", globalName: "Indra", bot: false },
+        bot: { id: "50", username: "anvia", bot: true },
+        direct: false,
+        thread: true,
+      }),
+    ).toMatchObject({
+      type: "action",
+      id: "90",
+      accountId: "50",
+      conversation: { id: "20", kind: "channel", threadId: "21" },
+      sender: { id: "40", displayName: "Indra", bot: false },
+      messageId: "77",
+      actionId: "anvia:token:approve",
+    });
+  });
+
+  it("rejects malformed button interactions", () => {
+    expect(
+      normalizeDiscordAction({
+        type: "action",
+        id: "90",
+        channelId: "20",
+        messageId: "77",
+        actionId: "x".repeat(65),
+        user: { id: "40", username: "indra", bot: false },
+        bot: { id: "not-a-snowflake", username: "anvia", bot: true },
+        direct: false,
+        thread: false,
+      }),
     ).toBeUndefined();
   });
 });

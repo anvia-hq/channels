@@ -1,9 +1,12 @@
 import type { AgentOutcome, Usage } from "@anvia/core";
+import { splitChannelMessage } from "@anvia/channel";
 import type {
   Channel,
+  ChannelActionEvent,
   ChannelAddress,
   ChannelAttachment,
   ChannelAttachmentData,
+  ChannelEvent,
   ChannelEventHandler,
   ChannelMessage,
   ChannelMessageEvent,
@@ -12,6 +15,7 @@ import type {
 
 export class FakeChannel implements Channel {
   readonly platform = "test";
+  readonly capabilities: { readonly actions: boolean };
   readonly sent: Array<{ address: ChannelAddress; message: ChannelMessage }> = [];
   readonly edits: Array<{ sent: SentChannelMessage; message: ChannelMessage }> = [];
   startCount = 0;
@@ -21,15 +25,16 @@ export class FakeChannel implements Channel {
   private handler: ChannelEventHandler | undefined;
   readonly attachmentData = new Map<string, ChannelAttachmentData>();
 
-  constructor(private readonly maximumMessageLength = Number.MAX_SAFE_INTEGER) {}
+  constructor(
+    private readonly maximumMessageLength = Number.MAX_SAFE_INTEGER,
+    actions = true,
+  ) {
+    this.capabilities = { actions };
+  }
 
   splitMessage(message: ChannelMessage): readonly ChannelMessage[] {
     this.splitCount += 1;
-    const parts: ChannelMessage[] = [];
-    for (let start = 0; start < message.text.length; start += this.maximumMessageLength) {
-      parts.push({ text: message.text.slice(start, start + this.maximumMessageLength) });
-    }
-    return parts;
+    return splitChannelMessage(message, this.maximumMessageLength);
   }
 
   async loadAttachment(
@@ -61,10 +66,27 @@ export class FakeChannel implements Channel {
     this.edits.push({ sent, message });
   }
 
-  async emit(event: ChannelMessageEvent): Promise<void> {
+  async emit(event: ChannelEvent): Promise<void> {
     if (this.handler === undefined) throw new Error("Fake channel is not running");
     await this.handler(event);
   }
+}
+
+export function actionEvent(
+  actionId: string,
+  overrides: Partial<ChannelActionEvent> = {},
+): ChannelActionEvent {
+  return {
+    type: "action",
+    id: overrides.id ?? "action-event-1",
+    platform: overrides.platform ?? "telegram",
+    accountId: overrides.accountId ?? "42",
+    conversation: overrides.conversation ?? { id: "chat-1", kind: "direct" },
+    sender: overrides.sender ?? { id: "user-1", displayName: "User", bot: false },
+    messageId: overrides.messageId ?? "1",
+    actionId,
+    raw: overrides.raw ?? {},
+  };
 }
 
 export type MessageEventOverrides = Readonly<{

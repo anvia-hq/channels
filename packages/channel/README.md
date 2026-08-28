@@ -20,8 +20,28 @@ const sent = await sendChannelMessage(channel, address, {
 });
 ```
 
+## Message actions
+
+Adapters may advertise `channel.capabilities.actions` and accept portable actions on outgoing
+messages. Selecting one produces a `ChannelActionEvent`; action IDs are opaque application values
+and must not contain credentials or serialized continuations.
+
+```ts
+await channel.send(address, {
+  text: "Deploy this release?",
+  actions: [
+    { id: "deploy:approve", label: "Approve", style: "primary" },
+    { id: "deploy:deny", label: "Deny", style: "danger" },
+  ],
+});
+```
+
+The portable limits are five actions per message, 80 characters per label, and 64 UTF-8 bytes per
+action ID. `splitChannelMessage()` places actions only on the final part of a long message. Custom
+text-only adapters can omit `capabilities`; callers should then use a textual fallback.
+
 Custom adapters implement `splitMessage(message)` in addition to lifecycle, send, and edit, plus
 `loadAttachment` if they emit attachment metadata. The split method must return at least one
 non-empty message and preserve the original content when its text parts are concatenated.
-`splitChannelText(text, maximumLength)` provides a whitespace-aware, surrogate-safe default for
-text platforms.
+`splitChannelMessage(message, maximumLength)` provides a whitespace-aware, surrogate-safe default
+that also preserves actions. `splitChannelText(text, maximumLength)` remains available for raw text.

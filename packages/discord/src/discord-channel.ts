@@ -8,17 +8,17 @@ import type {
   ChannelMessageEvent,
   SentChannelMessage,
 } from "@anvia/channel";
-import { splitChannelText } from "@anvia/channel";
+import { splitChannelMessage, validateChannelActions } from "@anvia/channel";
 import { DiscordJsGateway } from "./discord-js-gateway.js";
-import { normalizeDiscordMessage } from "./normalize.js";
+import { normalizeDiscordAction, normalizeDiscordMessage } from "./normalize.js";
 import { validateDiscordSnowflake } from "./snowflake.js";
-import type { DiscordGateway, DiscordGatewayMessage } from "./types.js";
+import type { DiscordGateway, DiscordGatewayEvent } from "./types.js";
 
 const MAX_MESSAGE_LENGTH = 2_000;
 
 export type DiscordChannelErrorContext = Readonly<{
   operation: "gateway" | "handle";
-  message?: DiscordGatewayMessage;
+  event?: DiscordGatewayEvent;
 }>;
 
 type DiscordChannelCommonOptions = Readonly<{
@@ -43,8 +43,9 @@ export function discord(options: DiscordChannelOptions): DiscordChannel {
   return new DiscordChannel(options);
 }
 
-export class DiscordChannel implements Channel<DiscordGatewayMessage> {
+export class DiscordChannel implements Channel<DiscordGatewayEvent> {
   readonly platform = "discord";
+  readonly capabilities = { actions: true } as const;
 
   private readonly gateway: DiscordGateway;
   private readonly onError: DiscordChannelCommonOptions["onError"];
@@ -64,32 +65,36 @@ export class DiscordChannel implements Channel<DiscordGatewayMessage> {
   }
 
   splitMessage(message: ChannelMessage): readonly ChannelMessage[] {
-    return splitChannelText(message.text, MAX_MESSAGE_LENGTH).map((text) => ({ text }));
+    return splitChannelMessage(message, MAX_MESSAGE_LENGTH);
   }
 
   async loadAttachment(
-    event: ChannelMessageEvent<DiscordGatewayMessage>,
+    event: ChannelMessageEvent<DiscordGatewayEvent>,
     attachment: ChannelAttachment,
   ): Promise<ChannelAttachmentData> {
+    if (event.raw.type !== "message") throw new TypeError("Discord message raw event is invalid");
     const source = event.raw.attachments.find((candidate) => candidate.id === attachment.id);
     if (source === undefined) throw new Error(`Discord attachment ${attachment.id} is unavailable`);
     return { type: "url", url: source.url };
   }
 
-  async start(handler: ChannelEventHandler<DiscordGatewayMessage>): Promise<void> {
+  async start(handler: ChannelEventHandler<DiscordGatewayEvent>): Promise<void> {
     if (this.running) throw new Error("Discord channel is already running");
     if (typeof handler !== "function") throw new TypeError("Discord event handler is required");
     this.running = true;
 
     try {
-      await this.gateway.start(async (message) => {
-        const event = normalizeDiscordMessage(message);
+      await this.gateway.start(async (source) => {
+        const event =
+          source.type === "action"
+            ? normalizeDiscordAction(source)
+            : normalizeDiscordMessage(source);
         if (event === undefined || event.sender.bot) return;
 
         try {
           await handler(event);
         } catch (error) {
-          await this.reportError(error, { operation: "handle", message });
+          await this.reportError(error, { operation: "handle", event: source });
         }
       });
     } catch (error) {
@@ -108,7 +113,7 @@ export class DiscordChannel implements Channel<DiscordGatewayMessage> {
     validateAddress(address);
     validateMessage(message);
     const targetChannelId = address.threadId ?? address.conversationId;
-    const sent = await this.gateway.send(targetChannelId, message.text);
+    const sent = await this.gateway.send(targetChannelId, message);
 
     return {
       id: sent.id,
@@ -125,11 +130,7 @@ export class DiscordChannel implements Channel<DiscordGatewayMessage> {
     validateAddress(sent.address);
     validateDiscordSnowflake(sent.id, "Discord message ID");
     validateMessage(message);
-    await this.gateway.edit(
-      sent.address.threadId ?? sent.address.conversationId,
-      sent.id,
-      message.text,
-    );
+    await this.gateway.edit(sent.address.threadId ?? sent.address.conversationId, sent.id, message);
   }
 
   private async reportError(error: unknown, context: DiscordChannelErrorContext): Promise<void> {
@@ -158,4 +159,5 @@ function validateMessage(message: ChannelMessage): void {
   if (message.text.length > MAX_MESSAGE_LENGTH) {
     throw new RangeError(`Discord message text must not exceed ${MAX_MESSAGE_LENGTH} characters`);
   }
+  validateChannelActions(message.actions);
 }

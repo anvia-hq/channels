@@ -8,7 +8,9 @@ export {
 } from "./defaults.js";
 export {
   MemoryChannelAgentInteractionStore,
+  channelInteractionActions,
   channelInteractionKey,
+  parseChannelAgentActionResponse,
   parseChannelAgentInteractionResponse,
   renderChannelAgentInteraction,
 } from "./interactions.js";

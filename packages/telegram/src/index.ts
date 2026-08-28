@@ -4,11 +4,15 @@ export { normalizeTelegramUpdate } from "./normalize.js";
 export { TelegramChannel, telegram } from "./telegram-channel.js";
 export type {
   TelegramBotApi,
+  TelegramAnswerCallbackQueryRequest,
+  TelegramCallbackQuery,
   TelegramChat,
   TelegramChatType,
   TelegramEditMessageTextRequest,
   TelegramEntityType,
   TelegramGetUpdatesRequest,
+  TelegramInlineKeyboardButton,
+  TelegramInlineKeyboardMarkup,
   TelegramMessage,
   TelegramMessageEntity,
   TelegramMediaFile,

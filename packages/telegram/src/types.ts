@@ -59,9 +59,17 @@ export type TelegramMessage = Readonly<{
   reply_to_message?: TelegramMessage;
 }>;
 
+export type TelegramCallbackQuery = Readonly<{
+  id: string;
+  from: TelegramUser;
+  message?: TelegramMessage;
+  data?: string;
+}>;
+
 export type TelegramUpdate = Readonly<{
   update_id: number;
   message?: TelegramMessage;
+  callback_query?: TelegramCallbackQuery;
 }>;
 
 export type TelegramGetUpdatesRequest = Readonly<{
@@ -75,12 +83,27 @@ export type TelegramSendMessageRequest = Readonly<{
   chat_id: number | string;
   message_thread_id?: number;
   text: string;
+  reply_markup?: TelegramInlineKeyboardMarkup;
 }>;
 
 export type TelegramEditMessageTextRequest = Readonly<{
   chat_id: number | string;
   message_id: number;
   text: string;
+  reply_markup?: TelegramInlineKeyboardMarkup;
+}>;
+
+export type TelegramInlineKeyboardButton = Readonly<{
+  text: string;
+  callback_data: string;
+}>;
+
+export type TelegramInlineKeyboardMarkup = Readonly<{
+  inline_keyboard: readonly (readonly TelegramInlineKeyboardButton[])[];
+}>;
+
+export type TelegramAnswerCallbackQueryRequest = Readonly<{
+  callback_query_id: string;
 }>;
 
 export interface TelegramBotApi {
@@ -94,5 +117,9 @@ export interface TelegramBotApi {
     request: TelegramEditMessageTextRequest,
     signal?: AbortSignal,
   ): Promise<TelegramMessage | true>;
+  answerCallbackQuery(
+    request: TelegramAnswerCallbackQueryRequest,
+    signal?: AbortSignal,
+  ): Promise<true>;
   downloadFile(fileId: string, signal?: AbortSignal): Promise<ChannelAttachmentData>;
 }

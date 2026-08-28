@@ -98,6 +98,46 @@ describe("Telegram Bot API client", () => {
     ]);
   });
 
+  it("runtime-validates and acknowledges callback queries", async () => {
+    const fetch = vi
+      .fn<typeof globalThis.fetch>()
+      .mockResolvedValueOnce(
+        jsonResponse({
+          ok: true,
+          result: [
+            {
+              update_id: 20,
+              callback_query: {
+                id: "callback-1",
+                from: { id: 7, is_bot: false, first_name: "Indra" },
+                data: "anvia:token:approve",
+                message: {
+                  message_id: 77,
+                  chat: { id: -100, type: "supergroup" },
+                  text: "Approve?",
+                },
+              },
+            },
+          ],
+        }),
+      )
+      .mockResolvedValueOnce(jsonResponse({ ok: true, result: true }));
+    const api = createTelegramBotApiClient({ token: "123:test-token", fetch });
+
+    await expect(api.getUpdates({ allowed_updates: ["callback_query"] })).resolves.toMatchObject([
+      {
+        callback_query: {
+          id: "callback-1",
+          data: "anvia:token:approve",
+          from: { id: 7 },
+          message: { message_id: 77 },
+        },
+      },
+    ]);
+    await expect(api.answerCallbackQuery({ callback_query_id: "callback-1" })).resolves.toBe(true);
+    expect(fetch.mock.calls[1]?.[0]).toContain("/answerCallbackQuery");
+  });
+
   it.each([
     ["empty file ID", { file_id: "", width: 10, height: 20 }, "file_id was empty"],
     ["negative width", { file_id: "photo-id", width: -1, height: 20 }, "positive integer"],

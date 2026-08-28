@@ -4,8 +4,8 @@ export {
   validateSlackId,
   validateSlackTimestamp,
 } from "./identifiers.js";
-export { normalizeSlackMessage } from "./normalize.js";
-export { parseSlackSocketEvent } from "./socket-event.js";
+export { normalizeSlackAction, normalizeSlackMessage } from "./normalize.js";
+export { parseSlackSocketEvent, parseSlackSocketInteraction } from "./socket-event.js";
 export { SlackChannel, slack } from "./slack-channel.js";
 export type { SlackChannelErrorContext, SlackChannelOptions } from "./slack-channel.js";
 export { SlackSocketTransport } from "./slack-socket-transport.js";
@@ -15,6 +15,8 @@ export type {
   SlackIdentity,
   SlackFile,
   SlackSentMessage,
+  SlackSocketAction,
+  SlackSocketEvent,
   SlackSocketMessage,
   SlackTransport,
   SlackTransportHandler,

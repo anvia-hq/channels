@@ -31,6 +31,58 @@ describe("SlackChannel", () => {
     await channel.stop();
   });
 
+  it("dispatches normalized interactive actions", async () => {
+    const fake = fakeTransport();
+    const handler = vi.fn<(event: unknown) => Promise<void>>(async () => undefined);
+    const channel = slack({ transport: fake.transport });
+    await channel.start(handler);
+
+    await fake.emit({
+      type: "action",
+      eventId: "trigger-1",
+      teamId: "T1",
+      channelId: "C1",
+      channelType: "channel",
+      messageTimestamp: "1700000001.000002",
+      senderId: "U1",
+      actionId: "anvia:token:approve",
+      actionTimestamp: "1700000002.000003",
+      botUserId: "U2",
+    });
+
+    expect(handler).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "action",
+        messageId: "1700000001.000002",
+        actionId: "anvia:token:approve",
+      }),
+    );
+    await channel.stop();
+  });
+
+  it("does not dispatch malformed interactive actions", async () => {
+    const fake = fakeTransport();
+    const handler = vi.fn<(event: unknown) => Promise<void>>(async () => undefined);
+    const channel = slack({ transport: fake.transport });
+    await channel.start(handler);
+
+    await fake.emit({
+      type: "action",
+      eventId: "trigger-1",
+      teamId: "T1",
+      channelId: "C1",
+      channelType: "channel",
+      messageTimestamp: "1700000001.000002",
+      senderId: "U1",
+      actionId: "x".repeat(65),
+      actionTimestamp: "1700000002.000003",
+      botUserId: "U2",
+    });
+
+    expect(handler).not.toHaveBeenCalled();
+    await channel.stop();
+  });
+
   it("reports handler errors and continues receiving messages", async () => {
     const fake = fakeTransport();
     const failure = new Error("temporary failure");
@@ -49,7 +101,7 @@ describe("SlackChannel", () => {
     expect(handler).toHaveBeenCalledTimes(2);
     expect(onError).toHaveBeenCalledWith(failure, {
       operation: "handle",
-      message: first,
+      event: first,
     });
     await channel.stop();
   });
@@ -67,7 +119,7 @@ describe("SlackChannel", () => {
       { text: "alert" },
     );
 
-    expect(fake.send).toHaveBeenCalledWith("C1", "1700000000.000001", "alert");
+    expect(fake.send).toHaveBeenCalledWith("C1", "1700000000.000001", { text: "alert" });
     expect(sent).toEqual({
       id: "1700000001.000002",
       address: {
@@ -79,7 +131,7 @@ describe("SlackChannel", () => {
     });
 
     await channel.edit(sent, { text: "resolved" });
-    expect(fake.edit).toHaveBeenCalledWith("C1", "1700000001.000002", "resolved");
+    expect(fake.edit).toHaveBeenCalledWith("C1", "1700000001.000002", { text: "resolved" });
   });
 
   it("loads private attachments through the authenticated transport", async () => {
