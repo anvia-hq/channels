@@ -17,6 +17,7 @@ export type {
   TelegramGetUpdatesRequest,
   TelegramInlineKeyboardButton,
   TelegramInlineKeyboardMarkup,
+  TelegramInvalidUpdate,
   TelegramMessage,
   TelegramMessageReactionUpdated,
   TelegramMessageEntity,
@@ -26,6 +27,7 @@ export type {
   TelegramSendMessageRequest,
   TelegramSendAttachmentRequest,
   TelegramUpdate,
+  TelegramUpdateBatch,
   TelegramUser,
 } from "./types.js";
 export type {

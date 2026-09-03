@@ -28,5 +28,14 @@
     "tsup": "catalog:",
     "typescript": "catalog:",
     "vitest": "catalog:"
-  }
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/anvia-hq/channels.git",
+    "directory": "packages/telegram"
+  },
+  "engines": {
+    "node": ">=24"
+  },
+  "sideEffects": false
 }

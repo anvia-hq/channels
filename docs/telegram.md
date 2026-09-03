@@ -57,6 +57,11 @@ await channel.start(handler);
 `start()` validates the token with `getMe`, then starts the background polling loop. Successfully
 handled updates advance the offset; handler failures are reported and retried.
 
+Poll failures retry with exponential backoff: `retryDelayMs`, doubling per consecutive failure up
+to 30 seconds, resetting after a successful poll. Telegram rate limits (`429`) wait exactly the
+`retry_after` the API returns instead. `onError` receives `context.errorCode` for Bot API errors,
+so applications can treat fatal codes such as `401` differently from transient ones.
+
 ## Webhook delivery
 
 The adapter validates a secret configured by your application. Configure the same secret with

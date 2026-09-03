@@ -1,9 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
-import { normalizeTelegramUpdate, telegram } from "../src/index.js";
+import { normalizeTelegramUpdate, TelegramApiError, telegram } from "../src/index.js";
 import type {
   TelegramBotApi,
   TelegramMessage,
   TelegramUpdate,
+  TelegramUpdateBatch,
   TelegramUser,
 } from "../src/index.js";
 
@@ -18,13 +19,14 @@ describe("TelegramChannel", () => {
   it("polls, normalizes, advances the offset, and stops gracefully", async () => {
     const update = textUpdate(10);
     const fake = fakeApi();
-    fake.getUpdates.mockResolvedValueOnce([update]).mockImplementation(waitForAbort);
+    fake.getUpdates
+      .mockResolvedValueOnce({ updates: [update], invalid: [] })
+      .mockImplementation(waitForAbort);
     const handler = vi.fn<(event: unknown) => Promise<void>>(async () => undefined);
     const channel = telegram({ api: fake.api, polling: { retryDelayMs: 0 } });
 
     await channel.start(handler);
     await vi.waitFor(() => expect(fake.getUpdates).toHaveBeenCalledTimes(2));
-
     expect(handler).toHaveBeenCalledOnce();
     expect(handler).toHaveBeenCalledWith(
       expect.objectContaining({ id: "10", text: "hello", platform: "telegram" }),
@@ -42,7 +44,10 @@ describe("TelegramChannel", () => {
   it("does not dispatch bot-authored messages", async () => {
     const fake = fakeApi();
     fake.getUpdates
-      .mockResolvedValueOnce([textUpdate(1, { sender: bot }), textUpdate(2)])
+      .mockResolvedValueOnce({
+        updates: [textUpdate(1, { sender: bot }), textUpdate(2)],
+        invalid: [],
+      })
       .mockImplementation(waitForAbort);
     const handler = vi.fn<(event: unknown) => Promise<void>>(async () => undefined);
     const channel = telegram({ api: fake.api });
@@ -59,8 +64,8 @@ describe("TelegramChannel", () => {
     const update = textUpdate(10);
     const fake = fakeApi();
     fake.getUpdates
-      .mockResolvedValueOnce([update])
-      .mockResolvedValueOnce([update])
+      .mockResolvedValueOnce({ updates: [update], invalid: [] })
+      .mockResolvedValueOnce({ updates: [update], invalid: [] })
       .mockImplementation(waitForAbort);
     const handler = vi
       .fn<(event: unknown) => Promise<void>>()
@@ -92,7 +97,7 @@ describe("TelegramChannel", () => {
     const fake = fakeApi();
     fake.getUpdates
       .mockRejectedValueOnce(pollError)
-      .mockResolvedValueOnce([textUpdate(10)])
+      .mockResolvedValueOnce({ updates: [textUpdate(10)], invalid: [] })
       .mockImplementation(waitForAbort);
     const handler = vi.fn<(event: unknown) => Promise<void>>(async () => undefined);
     const onError = vi.fn();
@@ -108,6 +113,113 @@ describe("TelegramChannel", () => {
     expect(onError).toHaveBeenCalledWith(pollError, { operation: "poll" });
     expect(handler).toHaveBeenCalledOnce();
     expect(fake.getUpdates.mock.calls[2]?.[0].offset).toBe(11);
+
+    await channel.stop();
+  });
+
+  it("backs off exponentially between poll failures and resets after success", async () => {
+    vi.useFakeTimers();
+    try {
+      const fake = fakeApi();
+      fake.getUpdates
+        .mockRejectedValueOnce(new Error("first failure"))
+        .mockRejectedValueOnce(new Error("second failure"))
+        .mockResolvedValueOnce({ updates: [textUpdate(10)], invalid: [] })
+        .mockRejectedValueOnce(new Error("third failure"))
+        .mockRejectedValueOnce(new Error("fourth failure"))
+        .mockImplementation(waitForAbort);
+      const handler = vi.fn<(event: unknown) => Promise<void>>(async () => undefined);
+      const channel = telegram({
+        api: fake.api,
+        polling: { retryDelayMs: 10 },
+      });
+
+      await channel.start(handler);
+      expect(fake.getUpdates).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(10);
+      expect(fake.getUpdates).toHaveBeenCalledTimes(2);
+
+      await vi.advanceTimersByTimeAsync(10);
+      expect(fake.getUpdates).toHaveBeenCalledTimes(2);
+
+      await vi.advanceTimersByTimeAsync(10);
+      expect(fake.getUpdates).toHaveBeenCalledTimes(4);
+
+      await vi.advanceTimersByTimeAsync(10);
+      expect(fake.getUpdates).toHaveBeenCalledTimes(5);
+
+      await vi.advanceTimersByTimeAsync(10);
+      expect(fake.getUpdates).toHaveBeenCalledTimes(5);
+
+      await vi.advanceTimersByTimeAsync(10);
+      expect(fake.getUpdates).toHaveBeenCalledTimes(6);
+
+      await channel.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("honors Telegram retry_after over the backoff curve", async () => {
+    vi.useFakeTimers();
+    try {
+      const fake = fakeApi();
+      fake.getUpdates
+        .mockRejectedValueOnce(
+          new TelegramApiError("getUpdates", "Too Many Requests", {
+            errorCode: 429,
+            retryAfterSeconds: 3,
+          }),
+        )
+        .mockImplementation(waitForAbort);
+      const handler = vi.fn<(event: unknown) => Promise<void>>(async () => undefined);
+      const channel = telegram({
+        api: fake.api,
+        polling: { retryDelayMs: 10 },
+      });
+
+      await channel.start(handler);
+      expect(fake.getUpdates).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(2_999);
+      expect(fake.getUpdates).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect(fake.getUpdates).toHaveBeenCalledTimes(2);
+
+      await channel.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("skips and reports malformed updates without stalling the batch", async () => {
+    const fake = fakeApi();
+    fake.getUpdates
+      .mockResolvedValueOnce({
+        updates: [textUpdate(7)],
+        invalid: [
+          { updateId: 8, error: new TypeError("malformed payload") },
+          { updateId: undefined, error: new TypeError("unidentifiable payload") },
+        ],
+      })
+      .mockImplementation(waitForAbort);
+    const handler = vi.fn<(event: unknown) => Promise<void>>(async () => undefined);
+    const onError = vi.fn();
+    const channel = telegram({
+      api: fake.api,
+      polling: { retryDelayMs: 0 },
+      onError,
+    });
+
+    await channel.start(handler);
+    await vi.waitFor(() => expect(fake.getUpdates).toHaveBeenCalledTimes(2));
+
+    expect(handler).toHaveBeenCalledOnce();
+    expect(onError).toHaveBeenCalledTimes(2);
+    expect(onError).toHaveBeenCalledWith(expect.any(TypeError), { operation: "poll" });
+    expect(fake.getUpdates.mock.calls[1]?.[0].offset).toBe(9);
 
     await channel.stop();
   });
@@ -164,7 +276,9 @@ describe("TelegramChannel", () => {
         },
       },
     };
-    fake.getUpdates.mockResolvedValueOnce([update]).mockImplementation(waitForAbort);
+    fake.getUpdates
+      .mockResolvedValueOnce({ updates: [update], invalid: [] })
+      .mockImplementation(waitForAbort);
     const handler = vi.fn<(event: unknown) => Promise<void>>(async () => undefined);
     const channel = telegram({ api: fake.api });
 
@@ -261,7 +375,9 @@ describe("TelegramChannel", () => {
       },
     };
     const fake = fakeApi();
-    fake.getUpdates.mockResolvedValueOnce([update]).mockImplementation(waitForAbort);
+    fake.getUpdates
+      .mockResolvedValueOnce({ updates: [update], invalid: [] })
+      .mockImplementation(waitForAbort);
     const handler = vi.fn<(event: unknown) => Promise<void>>(async () => undefined);
     const channel = telegram({ api: fake.api });
 
@@ -457,12 +573,12 @@ function sentTelegramMessage(): TelegramMessage {
 function waitForAbort(
   _request: Parameters<TelegramBotApi["getUpdates"]>[0],
   signal?: AbortSignal,
-): Promise<readonly TelegramUpdate[]> {
-  return new Promise((resolve) => {
+): Promise<TelegramUpdateBatch> {
+  return new Promise<TelegramUpdateBatch>((resolve) => {
     if (signal?.aborted === true) {
-      resolve([]);
+      resolve({ updates: [], invalid: [] });
       return;
     }
-    signal?.addEventListener("abort", () => resolve([]), { once: true });
+    signal?.addEventListener("abort", () => resolve({ updates: [], invalid: [] }), { once: true });
   });
 }

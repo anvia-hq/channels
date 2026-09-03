@@ -29,5 +29,14 @@
   "dependencies": {
     "@anvia/channel": "workspace:*",
     "discord.js": "^14.27.0"
-  }
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/anvia-hq/channels.git",
+    "directory": "packages/discord"
+  },
+  "engines": {
+    "node": ">=24"
+  },
+  "sideEffects": false
 }

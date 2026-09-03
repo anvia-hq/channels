@@ -117,6 +117,7 @@ export class DiscordJsGateway implements DiscordGateway {
       intents,
       partials: [Partials.Channel, Partials.Message, Partials.Reaction, Partials.User],
     });
+    this.attachHealthListeners(client);
     const messageListener = (message: Message) => {
       let delivery: Promise<void>;
       delivery = Promise.resolve()
@@ -273,7 +274,7 @@ export class DiscordJsGateway implements DiscordGateway {
       body: Readonly<Record<string, unknown>>;
       files?: NonNullable<RestRequest["files"]>;
     } = {
-      body: messageBody(message),
+      body: { ...messageBody(message), attachments: [] },
     };
     if (files.length > 0) request.files = files;
     await this.rest.patch(Routes.channelMessage(channelId, messageId), request);
@@ -319,6 +320,18 @@ export class DiscordJsGateway implements DiscordGateway {
       this.reactionRemoveListener = undefined;
       this.errorListener = undefined;
     }
+  }
+
+  private attachHealthListeners(client: Client): void {
+    client.on(Events.ShardDisconnect, () => {
+      void this.reportError(new Error("Discord shard disconnected"));
+    });
+    client.on(Events.ShardReconnecting, () => {
+      void this.reportError(new Error("Discord shard reconnecting"));
+    });
+    client.on(Events.Invalidated, () => {
+      void this.reportError(new Error("Discord session invalidated; check the bot token"));
+    });
   }
 
   private async reportError(error: unknown): Promise<void> {

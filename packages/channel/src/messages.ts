@@ -1,5 +1,7 @@
 import type { Channel, ChannelAddress, ChannelMessage, SentChannelMessage } from "./types.js";
 
+const textEncoder = new TextEncoder();
+
 export const MAX_CHANNEL_ACTIONS = 5;
 export const MAX_CHANNEL_ACTION_ID_BYTES = 64;
 export const MAX_CHANNEL_ACTION_LABEL_LENGTH = 80;
@@ -178,12 +180,42 @@ export function validateChannelActions(actions: readonly unknown[] | undefined):
   }
 }
 
+/** Validates the portable outbound payload shared by all adapters: actions and attachments. */
+export function validateChannelMessage(message: ChannelMessage): void {
+  validateChannelActions(message.actions);
+  validateChannelAttachments(message.attachments);
+}
+
 export function isChannelActionId(value: unknown): value is string {
   return (
     typeof value === "string" &&
     value.length > 0 &&
-    Buffer.byteLength(value, "utf8") <= MAX_CHANNEL_ACTION_ID_BYTES
+    textEncoder.encode(value).byteLength <= MAX_CHANNEL_ACTION_ID_BYTES
   );
+}
+
+export class PartialDeliveryError extends Error {
+  /** Parts delivered before the failure, in order. */
+  readonly sent: readonly SentChannelMessage[];
+  /** The part whose delivery failed. */
+  readonly failedPart: ChannelMessage;
+  /** Zero-based index of the failed part. */
+  readonly failedIndex: number;
+
+  constructor(
+    sent: readonly SentChannelMessage[],
+    failedPart: ChannelMessage,
+    failedIndex: number,
+    options: { cause?: unknown } = {},
+  ) {
+    super(`Channel message delivery failed after ${sent.length} delivered part(s)`, {
+      cause: options.cause,
+    });
+    this.name = "PartialDeliveryError";
+    this.sent = sent;
+    this.failedPart = failedPart;
+    this.failedIndex = failedIndex;
+  }
 }
 
 export async function sendChannelMessage<RawEvent>(
@@ -191,12 +223,18 @@ export async function sendChannelMessage<RawEvent>(
   address: ChannelAddress,
   message: ChannelMessage,
 ): Promise<readonly SentChannelMessage[]> {
-  const sent: SentChannelMessage[] = [];
-  for (const part of channel.splitMessage(message)) {
-    sent.push(await channel.send(address, part));
-  }
-  if (sent.length === 0) {
+  validateChannelMessage(message);
+  const parts = channel.splitMessage(message);
+  if (parts.length === 0) {
     throw new Error("Channel splitMessage must return at least one message");
+  }
+  const sent: SentChannelMessage[] = [];
+  for (const [index, part] of parts.entries()) {
+    try {
+      sent.push(await channel.send(address, part));
+    } catch (error) {
+      throw new PartialDeliveryError(sent, part, index, { cause: error });
+    }
   }
   return sent;
 }

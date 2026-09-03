@@ -79,6 +79,12 @@ export type ChannelAgentInteractionOptions<RawEvent = unknown> = Readonly<{
   ) => AgentInteractionResponse | undefined | Promise<AgentInteractionResponse | undefined>;
   invalidResponseMessage?: string;
   expiredInteractionMessage?: string;
+  /** Maximum time a rendered interaction stays resumable; unset means it never expires. */
+  timeoutMs?: number;
+  /** Keyword that abandons a pending interaction; false disables the escape hatch. */
+  cancelKeyword?: string | false;
+  /** Reply sent after a successful cancel; false suppresses the reply. */
+  cancelMessage?: string | false;
 }>;
 
 export type ChannelAgentOptions<RawEvent = unknown, Output = string> = Readonly<{

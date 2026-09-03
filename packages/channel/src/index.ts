@@ -3,11 +3,13 @@ export {
   MAX_CHANNEL_ACTION_ID_BYTES,
   MAX_CHANNEL_ACTION_LABEL_LENGTH,
   MAX_CHANNEL_ATTACHMENTS,
+  PartialDeliveryError,
   isChannelActionId,
   sendChannelMessage,
   splitChannelMessage,
   splitChannelText,
   validateChannelAttachments,
+  validateChannelMessage,
   validateChannelActions,
 } from "./messages.js";
 export type {

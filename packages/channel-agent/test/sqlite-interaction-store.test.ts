@@ -34,6 +34,32 @@ describe("SqliteChannelAgentInteractionStore", () => {
     store.close();
   });
 
+  it("treats expired pending interactions as absent", () => {
+    const outcome = agentApproval();
+    if (outcome.type !== "interaction") throw new Error("Expected an interaction outcome");
+    const expired = {
+      continuation: outcome.continuation,
+      interaction: outcome.interaction,
+      expiresAt: Date.now() - 1,
+    };
+    const store = new SqliteChannelAgentInteractionStore({ database: ":memory:" });
+
+    store.set("conversation", expired);
+    expect(store.get("conversation")).toBeUndefined();
+    expect(store.get("conversation")).toBeUndefined();
+    expect(store.take("conversation", outcome.interaction.id)).toBeUndefined();
+
+    const live = {
+      continuation: outcome.continuation,
+      interaction: outcome.interaction,
+      expiresAt: Date.now() + 60_000,
+    };
+    store.set("conversation", live);
+    expect(store.get("conversation")).toEqual(live);
+    expect(store.take("conversation", outcome.interaction.id)).toEqual(live);
+    store.close();
+  });
+
   it("rejects unsafe table names", () => {
     expect(
       () =>

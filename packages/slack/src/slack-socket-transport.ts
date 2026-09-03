@@ -6,7 +6,7 @@ import type {
   ChannelMessage,
   ChannelOutboundAttachment,
 } from "@anvia/channel";
-import { isSlackId, isSlackTimestamp } from "./identifiers.js";
+import { isSlackDownloadUrl, isSlackId, isSlackTimestamp } from "./identifiers.js";
 import { parseSlackSocketEvent, parseSlackSocketInteraction } from "./socket-event.js";
 import type {
   SlackIdentity,
@@ -72,6 +72,12 @@ export class SlackSocketTransport implements SlackTransport {
     if (!Number.isSafeInteger(this.maximumAttachmentBytes) || this.maximumAttachmentBytes <= 0) {
       throw new TypeError("Slack maximum attachment size must be a positive integer");
     }
+    this.socket.on("reconnecting", () => {
+      void this.reportError(new Error("Slack Socket Mode connection lost; reconnecting"));
+    });
+    this.socket.on("disconnected", () => {
+      void this.reportError(new Error("Slack Socket Mode disconnected"));
+    });
   }
 
   async start(handler: SlackTransportHandler): Promise<void> {
@@ -176,6 +182,9 @@ export class SlackSocketTransport implements SlackTransport {
     if (file.size !== undefined && file.size > this.maximumAttachmentBytes) {
       throw new RangeError(`Slack attachment must not exceed ${this.maximumAttachmentBytes} bytes`);
     }
+    if (!isSlackDownloadUrl(file.privateDownloadUrl)) {
+      throw new TypeError("Slack attachment download URL is not a Slack-controlled HTTPS URL");
+    }
     return this.web.downloadFile(file.privateDownloadUrl, this.maximumAttachmentBytes, signal);
   }
 
@@ -202,7 +211,7 @@ export class SlackSocketTransport implements SlackTransport {
           ? parseSlackSocketInteraction(request.body, identity)
           : undefined;
     if (event === undefined) return;
-    const key = slackEventKey(event);
+    const key = event.eventId;
     if (this.rememberedMessages.has(key)) return;
     remember(this.rememberedMessages, key);
     await handler(event);
@@ -227,19 +236,6 @@ export class SlackSocketTransport implements SlackTransport {
       // Error observers must not terminate Socket Mode delivery.
     }
   }
-}
-
-function slackEventKey(event: Parameters<SlackTransportHandler>[0]): string {
-  if (event.type === "action") {
-    return `${event.teamId}:${event.channelId}:${event.messageTimestamp}:${event.actionTimestamp}:${event.actionId}`;
-  }
-  if ("timestamp" in event) {
-    return `${event.teamId}:${event.channelId}:${event.timestamp}`;
-  }
-  if (event.type === "reaction") {
-    return `${event.teamId}:${event.channelId}:${event.messageTimestamp}:${event.senderId}:${event.reaction}:${event.removed}`;
-  }
-  return `${event.teamId}:${event.channelId}:${event.messageTimestamp}:${event.type}`;
 }
 
 function socketRequest(value: unknown):
@@ -301,6 +297,9 @@ function slackWebClient(
           });
     },
     downloadFile: async (url, maximumBytes, signal) => {
+      if (!isSlackDownloadUrl(url)) {
+        throw new TypeError("Slack file download URL is not a Slack-controlled HTTPS URL");
+      }
       try {
         const request: RequestInit = {
           headers: { authorization: `Bearer ${botToken}` },

@@ -2,6 +2,7 @@ import type {
   TelegramBotApi,
   TelegramCallbackQuery,
   TelegramChat,
+  TelegramInvalidUpdate,
   TelegramMediaFile,
   TelegramMessage,
   TelegramMessageEntity,
@@ -124,9 +125,16 @@ export function createTelegramBotApiClient(options: TelegramBotApiClientOptions)
       if (!Array.isArray(result)) {
         throw new TelegramApiError("getUpdates", "result was not an array");
       }
-      return result.map((update, index) =>
-        parseTelegramUpdate(update, `getUpdates result[${index}]`),
-      );
+      const updates: TelegramUpdate[] = [];
+      const invalid: TelegramInvalidUpdate[] = [];
+      for (const [index, raw] of result.entries()) {
+        try {
+          updates.push(parseTelegramUpdate(raw, `getUpdates result[${index}]`));
+        } catch (error) {
+          invalid.push({ updateId: rawUpdateId(raw), error });
+        }
+      }
+      return { updates, invalid };
     },
 
     async sendMessage(request, signal) {
@@ -359,6 +367,12 @@ export function parseTelegramUpdate(value: unknown, label = "Telegram update"): 
   return result;
 }
 
+/** Extracts update_id from an unparseable payload so polling can advance past it. */
+function rawUpdateId(value: unknown): number | undefined {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
+  const updateId: unknown = (value as Record<string, unknown>).update_id;
+  return typeof updateId === "number" && Number.isSafeInteger(updateId) ? updateId : undefined;
+}
 function telegramMessageReaction(value: unknown, label: string): TelegramMessageReactionUpdated {
   const raw = object(value, label);
   const result: {

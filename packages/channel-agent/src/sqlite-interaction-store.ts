@@ -4,6 +4,7 @@ import {
   parseAgentContinuation,
   parseAgentInteractionRequest,
 } from "@anvia/core/agent/interactions";
+import { interactionExpired } from "./interactions.js";
 import type {
   ChannelAgentInteractionStore,
   PendingChannelAgentInteraction,
@@ -49,7 +50,13 @@ export class SqliteChannelAgentInteractionStore implements ChannelAgentInteracti
     const row = this.database
       .prepare(`SELECT pending_json FROM ${this.table} WHERE interaction_key = ?`)
       .get(key);
-    return row === undefined ? undefined : parsePending(row.pending_json);
+    if (row === undefined) return undefined;
+    const pending = parsePending(row.pending_json);
+    if (interactionExpired(pending)) {
+      this.delete(key, pending.interaction.id);
+      return undefined;
+    }
+    return pending;
   }
 
   set(key: string, pending: PendingChannelAgentInteraction): void {
@@ -76,7 +83,19 @@ export class SqliteChannelAgentInteractionStore implements ChannelAgentInteracti
          RETURNING pending_json`,
       )
       .get(key, interactionId);
-    return row === undefined ? undefined : parsePending(row.pending_json);
+    if (row === undefined) return undefined;
+    const pending = parsePending(row.pending_json);
+    return interactionExpired(pending) ? undefined : pending;
+  }
+  delete(key: string, interactionId: string): void {
+    validateKey(key);
+    validateKey(interactionId, "Channel interaction ID");
+    this.database
+      .prepare(
+        `DELETE FROM ${this.table}
+         WHERE interaction_key = ? AND interaction_id = ?`,
+      )
+      .run(key, interactionId);
   }
 
   close(): void {
@@ -100,11 +119,22 @@ function serializePending(pending: PendingChannelAgentInteraction): string {
     continuation: typeof continuation;
     interaction: typeof interaction;
     actionToken?: string;
+    expiresAt?: number;
   } = {
     continuation,
     interaction,
   };
   if (pending.actionToken !== undefined) value.actionToken = pending.actionToken;
+  if (pending.expiresAt !== undefined) {
+    if (
+      typeof pending.expiresAt !== "number" ||
+      !Number.isSafeInteger(pending.expiresAt) ||
+      pending.expiresAt <= 0
+    ) {
+      throw new TypeError("Channel interaction expiry must be a positive epoch");
+    }
+    value.expiresAt = pending.expiresAt;
+  }
   return JSON.stringify(value);
 }
 
@@ -126,8 +156,22 @@ function parsePending(value: unknown): PendingChannelAgentInteraction {
   if (actionToken !== undefined && (typeof actionToken !== "string" || actionToken.length === 0)) {
     throw new TypeError("Stored channel interaction action token is invalid");
   }
-  if (actionToken === undefined) return { continuation, interaction };
-  return { continuation, interaction, actionToken };
+  const expiresAt = parsed.expiresAt;
+  if (
+    expiresAt !== undefined &&
+    (typeof expiresAt !== "number" || !Number.isSafeInteger(expiresAt))
+  ) {
+    throw new TypeError("Stored channel interaction expiry is invalid");
+  }
+  const pending: {
+    continuation: typeof continuation;
+    interaction: typeof interaction;
+    actionToken?: string;
+    expiresAt?: number;
+  } = { continuation, interaction };
+  if (actionToken !== undefined) pending.actionToken = actionToken;
+  if (expiresAt !== undefined) pending.expiresAt = expiresAt;
+  return pending;
 }
 
 function sqliteIdentifier(value: string): string {

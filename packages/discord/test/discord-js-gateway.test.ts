@@ -1,3 +1,4 @@
+import { EventEmitter } from "node:events";
 import { describe, expect, it, vi } from "vitest";
 import { DiscordJsGateway } from "../src/index.js";
 
@@ -25,6 +26,7 @@ describe("DiscordJsGateway REST delivery", () => {
         content: "updated",
         allowed_mentions: { parse: [] },
         components: [],
+        attachments: [],
       },
     });
   });
@@ -113,6 +115,48 @@ describe("DiscordJsGateway REST delivery", () => {
     expect(post).toHaveBeenCalledWith("/channels/20/typing", {});
     expect(put).toHaveBeenCalledWith("/channels/20/messages/77/reactions/%F0%9F%91%8D/@me");
     expect(deleteRequest).toHaveBeenCalledWith("/channels/20/messages/77");
+  });
+
+  it("replaces attachments on edit instead of appending", async () => {
+    const patch = vi.fn().mockResolvedValue({ id: "77", channel_id: "20" });
+    const gateway = new DiscordJsGateway({ token: "test-token" }, rest(vi.fn(), patch));
+
+    await gateway.edit("20", "77", {
+      text: "updated with file",
+      attachments: [
+        {
+          type: "file",
+          mediaType: "text/plain",
+          filename: "notes.txt",
+          source: { type: "data", data: "aGk=" },
+        },
+      ],
+    });
+
+    expect(patch).toHaveBeenCalledWith(
+      "/channels/20/messages/77",
+      expect.objectContaining({
+        body: expect.objectContaining({ attachments: [] }),
+        files: [{ data: Buffer.from("hi"), name: "notes.txt" }],
+      }),
+    );
+  });
+
+  it("reports shard lifecycle failures through the error observer", () => {
+    const onError = vi.fn();
+    const gateway = new DiscordJsGateway({ token: "test-token", onError }, rest(vi.fn(), vi.fn()));
+    const gatewayWithHealth = gateway as unknown as {
+      attachHealthListeners(client: { on(event: string, listener: () => void): unknown }): void;
+    };
+    const client = new EventEmitter();
+    gatewayWithHealth.attachHealthListeners(client);
+
+    client.emit("shardDisconnect");
+
+    expect(onError).toHaveBeenCalledTimes(1);
+    const [error] = onError.mock.calls[0] ?? [];
+    if (!(error instanceof Error)) throw new Error("Expected an error report");
+    expect(error.message).toContain("Discord shard disconnected");
   });
 
   it("caps the total bytes buffered for one Discord message", async () => {

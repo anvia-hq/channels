@@ -1,10 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  PartialDeliveryError,
+  isChannelActionId,
   sendChannelMessage,
   splitChannelMessage,
   splitChannelText,
   validateChannelActions,
   validateChannelAttachments,
+  validateChannelMessage,
 } from "../src/index.js";
 import type {
   Channel,
@@ -111,6 +114,101 @@ describe("channel message delivery", () => {
     expect(channel.send).toHaveBeenCalledTimes(3);
     expect(channel.send.mock.calls.map((call) => call[1].text)).toEqual(["abcde", "fghij", "k"]);
     expect(sent.map((message) => message.id)).toEqual(["1", "2", "3"]);
+  });
+});
+
+describe("channel message delivery edges", () => {
+  const address: ChannelAddress = { platform: "test", conversationId: "c1" };
+
+  it("rejects empty text and invalid maximum lengths", () => {
+    expect(() => splitChannelText("", 10)).toThrow(/empty/);
+    expect(() => splitChannelText("hello", 0)).toThrow(TypeError);
+    expect(() => splitChannelText("hello", -5)).toThrow(TypeError);
+    expect(() => splitChannelText("hello", 2.5)).toThrow(TypeError);
+  });
+
+  it("keeps text unchanged when it already fits", () => {
+    expect(splitChannelText("abcdefghij", 10)).toEqual(["abcdefghij"]);
+  });
+
+  it("prefers newline boundaries over spaces", () => {
+    expect(splitChannelText("one\ntwo three", 9)).toEqual(["one\n", "two three"]);
+  });
+
+  it("throws when a single character cannot fit", () => {
+    expect(() => splitChannelText("a🇺🇸b", 1)).toThrow(RangeError);
+  });
+
+  it("enforces the action id byte limit in UTF-8", () => {
+    expect(isChannelActionId("a".repeat(64))).toBe(true);
+    expect(isChannelActionId("a".repeat(65))).toBe(false);
+    expect(isChannelActionId("é".repeat(32))).toBe(true);
+    expect(isChannelActionId("é".repeat(33))).toBe(false);
+    expect(isChannelActionId("")).toBe(false);
+  });
+
+  it("reports partial delivery state when a later part fails", async () => {
+    const cause = new Error("platform down");
+    let calls = 0;
+    const channel = {
+      platform: "test",
+      splitMessage: (message: ChannelMessage) =>
+        splitChannelText(message.text, 5).map((text) => ({ text })),
+      async start(): Promise<void> {},
+      async stop(): Promise<void> {},
+      async edit(): Promise<void> {},
+      async send(): Promise<SentChannelMessage> {
+        calls += 1;
+        if (calls === 2) throw cause;
+        return { id: String(calls), address };
+      },
+    } satisfies Channel;
+
+    const failure = await sendChannelMessage(channel, address, { text: "abcdefghij" }).catch(
+      (error: unknown) => error,
+    );
+    if (!(failure instanceof PartialDeliveryError)) throw new Error("Expected partial failure");
+
+    expect(failure.sent).toEqual([{ id: "1", address }]);
+    expect(failure.failedIndex).toBe(1);
+    expect(failure.failedPart).toEqual({ text: "fghij" });
+    expect(failure.cause).toBe(cause);
+  });
+
+  it("rejects channels whose splitMessage yields no parts", async () => {
+    const channel: Channel = {
+      platform: "test",
+      splitMessage: () => [],
+      async start(): Promise<void> {},
+      async stop(): Promise<void> {},
+      async edit(): Promise<void> {},
+      async send(): Promise<SentChannelMessage> {
+        throw new Error("must not send");
+      },
+    };
+
+    await expect(sendChannelMessage(channel, address, { text: "hello" })).rejects.toThrow(
+      "at least one message",
+    );
+  });
+
+  it("validates the complete outbound message payload", () => {
+    expect(() =>
+      validateChannelMessage({ text: "hi", actions: [{ id: "go", label: "Go" }] }),
+    ).not.toThrow();
+    expect(() => validateChannelMessage({ text: "hi", actions: [] })).toThrow("non-empty array");
+    expect(() =>
+      validateChannelMessage({
+        text: "hi",
+        attachments: [
+          {
+            type: "file",
+            mediaType: "text/plain",
+            source: { type: "url", url: "http://insecure.example/file" },
+          },
+        ],
+      }),
+    ).toThrow(TypeError);
   });
 });
 

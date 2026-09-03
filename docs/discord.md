@@ -102,6 +102,10 @@ The adapter filters bot-authored events before application delivery. Gateway rea
 uncached messages are fetched before normalization. Handler failures are reported through
 `onError` without terminating the Gateway.
 
+Gateway health surfaces through `onError`: shard disconnects, reconnect attempts, and invalidated
+sessions (for example a revoked token) are all reported while discord.js keeps the connection
+alive. Sessions are not resumed from before the outage; events emitted during the gap are lost.
+
 ## Threads and replies
 
 Incoming threads use the parent channel as `conversation.id` and the Discord thread as

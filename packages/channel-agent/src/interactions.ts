@@ -15,6 +15,8 @@ export type PendingChannelAgentInteraction = Readonly<{
   interaction: AgentInteractionRequest;
   /** Opaque nonce used to reject callbacks from older interaction messages. */
   actionToken?: string;
+  /** Epoch milliseconds after which the pending interaction expires. */
+  expiresAt?: number;
 }>;
 
 export interface ChannelAgentInteractionStore {
@@ -32,25 +34,41 @@ export interface ChannelAgentInteractionStore {
     | PendingChannelAgentInteraction
     | undefined
     | Promise<PendingChannelAgentInteraction | undefined>;
+  delete(key: string, interactionId: string): void | Promise<void>;
 }
 
 export class MemoryChannelAgentInteractionStore implements ChannelAgentInteractionStore {
   private readonly pending = new Map<string, PendingChannelAgentInteraction>();
-
   get(key: string): PendingChannelAgentInteraction | undefined {
-    return this.pending.get(key);
+    const pending = this.pending.get(key);
+    if (pending === undefined) return undefined;
+    if (interactionExpired(pending)) {
+      this.pending.delete(key);
+      return undefined;
+    }
+    return pending;
   }
 
   set(key: string, pending: PendingChannelAgentInteraction): void {
     this.pending.set(key, pending);
   }
-
   take(key: string, interactionId: string): PendingChannelAgentInteraction | undefined {
     const pending = this.pending.get(key);
     if (pending === undefined || pending.interaction.id !== interactionId) return undefined;
     this.pending.delete(key);
+    if (interactionExpired(pending)) return undefined;
     return pending;
   }
+  delete(key: string, interactionId: string): void {
+    const pending = this.pending.get(key);
+    if (pending === undefined || pending.interaction.id !== interactionId) return;
+    this.pending.delete(key);
+  }
+}
+
+/** True when the pending interaction carries an expiry that has passed. */
+export function interactionExpired(pending: PendingChannelAgentInteraction): boolean {
+  return pending.expiresAt !== undefined && pending.expiresAt <= Date.now();
 }
 
 export function channelInteractionKey(event: ChannelActionEvent | ChannelMessageEvent): string {

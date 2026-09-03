@@ -96,6 +96,17 @@ export type TelegramGetUpdatesRequest = Readonly<{
   allowed_updates?: readonly string[];
 }>;
 
+export type TelegramInvalidUpdate = Readonly<{
+  /** update_id extracted leniently from the unparseable payload, when it has one. */
+  updateId: number | undefined;
+  error: unknown;
+}>;
+
+export type TelegramUpdateBatch = Readonly<{
+  updates: readonly TelegramUpdate[];
+  invalid: readonly TelegramInvalidUpdate[];
+}>;
+
 export type TelegramSendMessageRequest = Readonly<{
   chat_id: number | string;
   message_thread_id?: number;
@@ -155,7 +166,7 @@ export interface TelegramBotApi {
   getUpdates(
     request: TelegramGetUpdatesRequest,
     signal?: AbortSignal,
-  ): Promise<readonly TelegramUpdate[]>;
+  ): Promise<TelegramUpdateBatch>;
   sendMessage(request: TelegramSendMessageRequest, signal?: AbortSignal): Promise<TelegramMessage>;
   sendAttachment(
     request: TelegramSendAttachmentRequest,

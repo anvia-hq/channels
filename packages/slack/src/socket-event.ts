@@ -1,5 +1,5 @@
 import { isChannelActionId } from "@anvia/channel";
-import { isSlackId, isSlackTimestamp } from "./identifiers.js";
+import { isSlackDownloadUrl, isSlackId, isSlackTimestamp } from "./identifiers.js";
 import type {
   SlackChannelType,
   SlackFile,
@@ -210,7 +210,7 @@ function slackFiles(value: unknown): readonly SlackFile[] | undefined {
       return undefined;
     }
     const privateDownloadUrl = candidate.url_private_download ?? candidate.url_private;
-    if (!validPrivateDownloadUrl(privateDownloadUrl)) return undefined;
+    if (!isSlackDownloadUrl(privateDownloadUrl)) return undefined;
     const file: Mutable<SlackFile> = {
       id: candidate.id,
       name: nonemptyString(candidate.name) ? candidate.name : candidate.id,
@@ -223,21 +223,6 @@ function slackFiles(value: unknown): readonly SlackFile[] | undefined {
     files.push(file);
   }
   return files;
-}
-
-function validPrivateDownloadUrl(value: unknown): value is string {
-  if (!nonemptyString(value)) return false;
-  try {
-    const url = new URL(value);
-    return (
-      url.protocol === "https:" &&
-      ["slack.com", "slack-files.com", "slack-gov.com"].some(
-        (domain) => url.hostname === domain || url.hostname.endsWith(`.${domain}`),
-      )
-    );
-  } catch {
-    return false;
-  }
 }
 
 function supportedSubtype(type: "message" | "app_mention", subtype: unknown): boolean {

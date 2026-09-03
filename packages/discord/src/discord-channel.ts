@@ -8,11 +8,7 @@ import type {
   ChannelMessageEvent,
   SentChannelMessage,
 } from "@anvia/channel";
-import {
-  splitChannelMessage,
-  validateChannelActions,
-  validateChannelAttachments,
-} from "@anvia/channel";
+import { splitChannelMessage, validateChannelMessage } from "@anvia/channel";
 import { DiscordJsGateway } from "./discord-js-gateway.js";
 import { normalizeDiscordEvent } from "./normalize.js";
 import { validateDiscordSnowflake } from "./snowflake.js";
@@ -221,8 +217,7 @@ function validateMessage(message: ChannelMessage): void {
   if (message.text.length > MAX_MESSAGE_LENGTH) {
     throw new RangeError(`Discord message text must not exceed ${MAX_MESSAGE_LENGTH} characters`);
   }
-  validateChannelActions(message.actions);
-  validateChannelAttachments(message.attachments);
+  validateChannelMessage(message);
   if (message.replyToMessageId !== undefined) {
     validateDiscordSnowflake(message.replyToMessageId, "Discord reply message ID");
   }

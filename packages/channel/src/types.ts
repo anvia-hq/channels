@@ -168,7 +168,7 @@ export interface Channel<RawEvent = unknown> {
   start(handler: ChannelEventHandler<RawEvent>): Promise<void>;
   stop(): Promise<void>;
   send(address: ChannelAddress, message: ChannelMessage): Promise<SentChannelMessage>;
-  edit(sent: SentChannelMessage, message: ChannelMessage): Promise<void>;
+  edit?(sent: SentChannelMessage, message: ChannelMessage): Promise<void>;
   delete?(sent: SentChannelMessage): Promise<void>;
   showTyping?(address: ChannelAddress): Promise<void>;
   react?(sent: SentChannelMessage, reaction: string): Promise<void>;

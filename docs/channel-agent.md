@@ -224,6 +224,17 @@ Interaction storage and conversation memory are different:
 Keep externally mutating tools idempotent. Claiming a continuation is atomic, but a retry after a
 process or network failure cannot guarantee exactly-once side effects.
 
+Pending interactions can expire, be cancelled, and fail safely:
+
+- `interactions.timeoutMs` drops a pending interaction after the given delay; expired pendings are
+  treated as absent for replies and button clicks.
+- Replying with `cancel` (configurable or disabled with `interactions.cancelKeyword`) abandons the
+  pending interaction and confirms with `interactions.cancelMessage`.
+- If rendering or delivering an interaction prompt fails, the pending interaction is rolled back so
+  a prompt the user never saw can never be resumed by a later reply.
+- On shutdown, an already-sent streaming placeholder is deleted (or replaced with a short
+  "(interrupted)" note) instead of being left dangling.
+
 ## Graceful shutdown
 
 Stop the service before closing the databases it may still use:

@@ -194,6 +194,157 @@ describe("ChannelAgentService", () => {
     await service.stop();
   });
 
+  it("rolls back an armed interaction when rendering its prompt fails", async () => {
+    const channel = new FakeChannel();
+    const store = new MemoryChannelAgentInteractionStore();
+    const generate = vi.fn<ChannelAgentExecutor["generate"]>().mockResolvedValue(agentApproval());
+    const resume = vi
+      .fn<NonNullable<ChannelAgentExecutor["resume"]>>()
+      .mockResolvedValue(agentResponse("Email sent."));
+    const agent = { ...fakeAgent({ generate, streaming: false }), resume };
+    const onError = vi.fn();
+    const service = await serveChannelAgent({
+      channel,
+      agent,
+      streaming: { placeholder: false },
+      interactions: {
+        store,
+        render: () => {
+          throw new Error("render failed");
+        },
+      },
+      onError,
+    });
+
+    await channel.emit(messageEvent());
+    expect(store.get(channelInteractionKey(messageEvent()))).toBeUndefined();
+
+    await channel.emit(messageEvent({ id: "event-2", text: "approve" }));
+
+    expect(onError).toHaveBeenCalledWith(
+      expect.any(Error),
+      expect.objectContaining({ stage: "interaction" }),
+    );
+    expect(generate).toHaveBeenCalledTimes(2);
+    expect(resume).not.toHaveBeenCalled();
+    await service.stop();
+  });
+
+  it("rolls back an armed interaction when its prompt delivery fails", async () => {
+    const channel = new FakeChannel();
+    const store = new MemoryChannelAgentInteractionStore();
+    const generate = vi.fn<ChannelAgentExecutor["generate"]>().mockResolvedValue(agentApproval());
+    const resume = vi
+      .fn<NonNullable<ChannelAgentExecutor["resume"]>>()
+      .mockResolvedValue(agentResponse("Email sent."));
+    const agent = { ...fakeAgent({ generate, streaming: false }), resume };
+    const onError = vi.fn();
+    vi.spyOn(channel, "send").mockRejectedValueOnce(new Error("send failed"));
+    const service = await serveChannelAgent({
+      channel,
+      agent,
+      streaming: { placeholder: false },
+      interactions: { store },
+      onError,
+    });
+
+    await channel.emit(messageEvent());
+    expect(onError).toHaveBeenCalledWith(
+      expect.any(Error),
+      expect.objectContaining({ stage: "delivery" }),
+    );
+    expect(store.get(channelInteractionKey(messageEvent()))).toBeUndefined();
+
+    await channel.emit(messageEvent({ id: "event-2", text: "approve" }));
+
+    expect(generate).toHaveBeenCalledTimes(2);
+    expect(resume).not.toHaveBeenCalled();
+    await service.stop();
+  });
+
+  it("expires pending interactions after the configured timeout", async () => {
+    vi.useFakeTimers();
+    try {
+      const channel = new FakeChannel();
+      const store = new MemoryChannelAgentInteractionStore();
+      const generate = vi.fn<ChannelAgentExecutor["generate"]>().mockResolvedValue(agentApproval());
+      const resume = vi
+        .fn<NonNullable<ChannelAgentExecutor["resume"]>>()
+        .mockResolvedValue(agentResponse("Email sent."));
+      const agent = { ...fakeAgent({ generate, streaming: false }), resume };
+      const service = await serveChannelAgent({
+        channel,
+        agent,
+        streaming: { placeholder: false },
+        interactions: { store, timeoutMs: 30 },
+      });
+
+      await channel.emit(messageEvent());
+      expect(store.get(channelInteractionKey(messageEvent()))).toBeDefined();
+
+      vi.advanceTimersByTime(31);
+      await channel.emit(messageEvent({ id: "event-2", text: "approve" }));
+
+      expect(resume).not.toHaveBeenCalled();
+      expect(generate).toHaveBeenCalledTimes(2);
+      await service.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("cancels a pending interaction from the sender's next reply", async () => {
+    const channel = new FakeChannel();
+    const store = new MemoryChannelAgentInteractionStore();
+    const generate = vi.fn<ChannelAgentExecutor["generate"]>().mockResolvedValue(agentApproval());
+    const resume = vi
+      .fn<NonNullable<ChannelAgentExecutor["resume"]>>()
+      .mockResolvedValue(agentResponse("Email sent."));
+    const agent = { ...fakeAgent({ generate, streaming: false }), resume };
+    const service = await serveChannelAgent({
+      channel,
+      agent,
+      streaming: { placeholder: false },
+      interactions: { store },
+    });
+
+    await channel.emit(messageEvent());
+    await channel.emit(messageEvent({ id: "event-2", text: "cancel" }));
+
+    expect(store.get(channelInteractionKey(messageEvent()))).toBeUndefined();
+    expect(resume).not.toHaveBeenCalled();
+    expect(channel.sent.at(-1)?.message.text).toContain("cancelled");
+
+    await channel.emit(messageEvent({ id: "event-3", text: "hello again" }));
+    expect(generate).toHaveBeenCalledTimes(2);
+    await service.stop();
+  });
+
+  it("removes a dangling placeholder when shutdown aborts a run", async () => {
+    const channel = new FakeChannel();
+    const stream = vi.fn<ChannelAgentExecutor["stream"]>((input) => {
+      let reject: (reason: unknown) => void = () => undefined;
+      const result = new Promise<AgentOutcome<string>>((_, rejectFn) => {
+        reject = rejectFn;
+      });
+      input.abortSignal.addEventListener("abort", () => reject(new Error("aborted")), {
+        once: true,
+      });
+      return { textStream: textStream(), result };
+    });
+    const service = await serveChannelAgent({
+      channel,
+      agent: fakeAgent({ stream, streaming: true }),
+    });
+
+    const run = channel.emit(messageEvent());
+    await vi.waitFor(() => expect(stream).toHaveBeenCalledOnce());
+    await service.stop();
+    await run;
+
+    expect(channel.deleted.map((message) => message.id)).toEqual(["1"]);
+  });
+
   it("resumes native actions once and rejects duplicate callbacks", async () => {
     const channel = new FakeChannel();
     const generate = vi.fn<ChannelAgentExecutor["generate"]>().mockResolvedValue(agentApproval());
@@ -545,6 +696,27 @@ describe("ChannelAgentService", () => {
     await channel.emit(messageEvent());
 
     expect(channel.sent.map((item) => item.message.text)).toEqual(["report"]);
+    expect(channel.edits).toEqual([]);
+    await service.stop();
+  });
+
+  it("buffers streaming for channels without edit support", async () => {
+    const channel = new FakeChannel();
+    Object.defineProperties(channel, {
+      edit: { value: undefined },
+    });
+    const stream = vi.fn<ChannelAgentExecutor["stream"]>().mockReturnValue({
+      textStream: textStream("hel", "lo"),
+      result: Promise.resolve(agentResponse("hello")),
+    });
+    const service = await serveChannelAgent({
+      channel,
+      agent: fakeAgent({ stream, streaming: true }),
+    });
+
+    await channel.emit(messageEvent());
+
+    expect(channel.sent.map((item) => item.message.text)).toEqual(["hello"]);
     expect(channel.edits).toEqual([]);
     await service.stop();
   });

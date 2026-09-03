@@ -8,11 +8,7 @@ import type {
   ChannelMessageEvent,
   SentChannelMessage,
 } from "@anvia/channel";
-import {
-  splitChannelMessage,
-  validateChannelActions,
-  validateChannelAttachments,
-} from "@anvia/channel";
+import { splitChannelMessage, validateChannelMessage } from "@anvia/channel";
 import {
   TelegramApiError,
   createTelegramBotApiClient,
@@ -46,6 +42,8 @@ export type TelegramPollingOptions = Readonly<{
 export type TelegramChannelErrorContext = Readonly<{
   operation: "poll" | "handle";
   update?: TelegramUpdate;
+  /** Bot API error_code when the failure originated from Telegram itself. */
+  errorCode?: number;
 }>;
 
 export type TelegramWebhookOptions = Readonly<{
@@ -349,6 +347,7 @@ export class TelegramChannel implements Channel<TelegramUpdate> {
   ): Promise<void> {
     let offset: number | undefined;
     const handledUpdates = new Set<number>();
+    let pollFailures = 0;
 
     while (!signal.aborted) {
       let updates: readonly TelegramUpdate[];
@@ -359,11 +358,22 @@ export class TelegramChannel implements Channel<TelegramUpdate> {
           allowed_updates: ["message", "edited_message", "message_reaction", "callback_query"],
         };
         if (offset !== undefined) request.offset = offset;
-        updates = await this.api.getUpdates(request, signal);
+        const batch = await this.api.getUpdates(request, signal);
+        updates = batch.updates;
+        pollFailures = 0;
+        for (const invalid of batch.invalid) {
+          await this.reportError(invalid.error, { operation: "poll" });
+          if (invalid.updateId !== undefined) offset = nextOffset(offset, invalid.updateId);
+        }
       } catch (error) {
         if (signal.aborted) break;
-        await this.reportError(error, { operation: "poll" });
-        await abortableDelay(retryDelay(error, this.polling.retryDelayMs), signal);
+        pollFailures += 1;
+        const context: Mutable<TelegramChannelErrorContext> = { operation: "poll" };
+        if (error instanceof TelegramApiError && error.errorCode !== undefined) {
+          context.errorCode = error.errorCode;
+        }
+        await this.reportError(error, context);
+        await abortableDelay(retryDelay(error, this.polling.retryDelayMs, pollFailures), signal);
         continue;
       }
 
@@ -467,8 +477,7 @@ function validateMessage(message: ChannelMessage): void {
   if (message.text.length > MAX_MESSAGE_LENGTH) {
     throw new RangeError(`Telegram message text must not exceed ${MAX_MESSAGE_LENGTH} characters`);
   }
-  validateChannelActions(message.actions);
-  validateChannelAttachments(message.attachments);
+  validateChannelMessage(message);
   optionalPositiveInteger(message.replyToMessageId, "Telegram reply message ID");
 }
 
@@ -554,11 +563,13 @@ function rememberUpdate(updates: Set<number>, updateId: number): void {
   if (oldest !== undefined) updates.delete(oldest);
 }
 
-function retryDelay(error: unknown, fallback: number): number {
+const MAX_RETRY_DELAY_MS = 30_000;
+
+function retryDelay(error: unknown, fallback: number, attempt: number): number {
   if (error instanceof TelegramApiError && error.retryAfterSeconds !== undefined) {
     return error.retryAfterSeconds * 1_000;
   }
-  return fallback;
+  return Math.min(fallback * 2 ** (attempt - 1), MAX_RETRY_DELAY_MS);
 }
 
 function abortableDelay(milliseconds: number, signal: AbortSignal): Promise<void> {

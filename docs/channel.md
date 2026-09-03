@@ -76,6 +76,10 @@ const messages = await sendChannelMessage(channel, address, {
 Actions and attachments appear on the final split part. Reply metadata remains on every part. A
 media-only message uses `text: ""` and at least one attachment.
 
+If a later part fails to send, `sendChannelMessage()` throws `PartialDeliveryError` carrying the
+`sent` prefix, the `failedPart`, and its `failedIndex` so callers can clean up or resume without
+resending delivered parts.
+
 Use HTTPS URLs only for URL-backed attachments:
 
 ```ts
@@ -185,14 +189,17 @@ export class AcmeChannel implements Channel<AcmeEvent> {
     return { id: "platform-message-id", address };
   }
 
-  async edit(sent: SentChannelMessage, message: ChannelMessage): Promise<void> {
-    // Edit only fields supported by Acme.
-  }
+  // Text-only adapters omit edit; editable ones advertise
+  // capabilities.messageEdits and implement it.
 }
 ```
 
 Implement `loadAttachment()` when normalized incoming messages expose attachment metadata. Never
 put authenticated download URLs or platform credentials into a normalized event.
+
+`edit()` is optional: omit it for text-only adapters and gate calls on
+`capabilities.messageEdits === true && channel.edit !== undefined`. When `edit` is omitted, a
+channel-agent bridge automatically buffers streamed responses into a single send.
 
 ## Portable limits
 

@@ -14,8 +14,9 @@ events or agent prompts. Text-only adapters can omit `loadAttachment`.
 `Channel.send()` sends one platform-sized logical delivery. Use `sendChannelMessage()` for
 application or worker output that may exceed a platform limit. The channel's `splitMessage()`
 implementation owns the platform-specific boundary, while the helper preserves part ordering.
-Adapters may require multiple API calls for several attachments, so callers should handle partial
-delivery and make retries idempotent.
+Adapters may require multiple API calls for several attachments. When a later part fails,
+`sendChannelMessage()` throws `PartialDeliveryError` carrying the delivered prefix so callers can
+clean up or resume without resending it.
 
 ```ts
 import { sendChannelMessage } from "@anvia/channel";
@@ -45,7 +46,7 @@ The portable limits are five actions per message, 80 characters per label, and 6
 action ID. `splitChannelMessage()` places actions only on the final part of a long message. Custom
 text-only adapters can omit `capabilities`; callers should then use a textual fallback.
 
-Custom adapters implement `splitMessage(message)` in addition to lifecycle, send, and edit, plus
+Custom adapters implement `splitMessage(message)` in addition to lifecycle and send, plus
 `loadAttachment` if they emit attachment metadata. The split method must return at least one
 non-empty message and preserve the original content when its text parts are concatenated.
 `splitChannelMessage(message, maximumLength)` provides a whitespace-aware, surrogate-safe default
@@ -58,8 +59,9 @@ URL or base64 bytes. Attachments and actions stay on the final part of a split m
 metadata is retained on every part. A media-only message uses an empty `text` value.
 
 Adapters advertise support through `Channel.capabilities`. Reply targets use
-`message.replyToMessageId`; incoming replies expose `event.replyTo`. Optional `showTyping`, `react`,
-and `delete` methods provide portable lifecycle operations. Incoming edits, deletions, and reactions
+`message.replyToMessageId`; incoming replies expose `event.replyTo`. Optional `edit`, `showTyping`,
+`react`, and `delete` methods provide portable lifecycle operations; advertise
+`capabilities.messageEdits` when `edit` is implemented. Incoming edits, deletions, and reactions
 are emitted as `message-edited`, `message-deleted`, and `reaction` events. Platforms that do not
 offer a particular event or operation omit the corresponding capability or method.
 

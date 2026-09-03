@@ -50,18 +50,21 @@ describe("Telegram Bot API client", () => {
 
     await expect(
       api.getUpdates({ offset: 10, timeout: 30, allowed_updates: ["message"] }),
-    ).resolves.toEqual([
-      {
-        update_id: 10,
-        message: {
-          message_id: 7,
-          message_thread_id: 3,
-          from: { id: 5, is_bot: false, first_name: "Indra" },
-          chat: { id: -100, type: "supergroup", title: "Anvia" },
-          text: "hello",
+    ).resolves.toEqual({
+      updates: [
+        {
+          update_id: 10,
+          message: {
+            message_id: 7,
+            message_thread_id: 3,
+            from: { id: 5, is_bot: false, first_name: "Indra" },
+            chat: { id: -100, type: "supergroup", title: "Anvia" },
+            text: "hello",
+          },
         },
-      },
-    ]);
+      ],
+      invalid: [],
+    });
   });
 
   it("runtime-validates media fields returned by getUpdates", async () => {
@@ -88,14 +91,17 @@ describe("Telegram Bot API client", () => {
     );
     const api = createTelegramBotApiClient({ token: "123:test-token", fetch });
 
-    await expect(api.getUpdates({})).resolves.toMatchObject([
-      {
-        message: {
-          photo: [{ file_id: "photo-id", width: 10, height: 20, file_size: 30 }],
-          document: { file_id: "document-id", file_size: 40 },
+    await expect(api.getUpdates({})).resolves.toMatchObject({
+      updates: [
+        {
+          message: {
+            photo: [{ file_id: "photo-id", width: 10, height: 20, file_size: 30 }],
+            document: { file_id: "document-id", file_size: 40 },
+          },
         },
-      },
-    ]);
+      ],
+      invalid: [],
+    });
   });
 
   it("runtime-validates and acknowledges callback queries", async () => {
@@ -124,16 +130,19 @@ describe("Telegram Bot API client", () => {
       .mockResolvedValueOnce(jsonResponse({ ok: true, result: true }));
     const api = createTelegramBotApiClient({ token: "123:test-token", fetch });
 
-    await expect(api.getUpdates({ allowed_updates: ["callback_query"] })).resolves.toMatchObject([
-      {
-        callback_query: {
-          id: "callback-1",
-          data: "anvia:token:approve",
-          from: { id: 7 },
-          message: { message_id: 77 },
+    await expect(api.getUpdates({ allowed_updates: ["callback_query"] })).resolves.toMatchObject({
+      updates: [
+        {
+          callback_query: {
+            id: "callback-1",
+            data: "anvia:token:approve",
+            from: { id: 7 },
+            message: { message_id: 77 },
+          },
         },
-      },
-    ]);
+      ],
+      invalid: [],
+    });
     await expect(api.answerCallbackQuery({ callback_query_id: "callback-1" })).resolves.toBe(true);
     expect(fetch.mock.calls[1]?.[0]).toContain("/answerCallbackQuery");
   });
@@ -159,16 +168,19 @@ describe("Telegram Bot API client", () => {
     );
     const api = createTelegramBotApiClient({ token: "123:test-token", fetch });
 
-    await expect(api.getUpdates({ allowed_updates: ["message_reaction"] })).resolves.toMatchObject([
-      {
-        message_reaction: {
-          actor_chat: { id: -200 },
-          date: 1_700_000_000,
-          old_reaction: [{ type: "custom_emoji", custom_emoji_id: "custom-1" }],
-          new_reaction: [{ type: "paid" }],
+    await expect(api.getUpdates({ allowed_updates: ["message_reaction"] })).resolves.toMatchObject({
+      updates: [
+        {
+          message_reaction: {
+            actor_chat: { id: -200 },
+            date: 1_700_000_000,
+            old_reaction: [{ type: "custom_emoji", custom_emoji_id: "custom-1" }],
+            new_reaction: [{ type: "paid" }],
+          },
         },
-      },
-    ]);
+      ],
+      invalid: [],
+    });
   });
 
   it("sends URL and base64 attachments with the correct Bot API encoding", async () => {
@@ -216,7 +228,7 @@ describe("Telegram Bot API client", () => {
       { file_id: "photo-id", width: 10, height: 20, file_size: -1 },
       "nonnegative integer",
     ],
-  ])("rejects media with an %s", async (_case, photo, message) => {
+  ])("quarantines media with an %s", async (_case, photo, message) => {
     const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValue(
       jsonResponse({
         ok: true,
@@ -234,7 +246,51 @@ describe("Telegram Bot API client", () => {
     );
     const api = createTelegramBotApiClient({ token: "123:test-token", fetch });
 
-    await expect(api.getUpdates({})).rejects.toThrow(message);
+    const batch = await api.getUpdates({});
+    expect(batch.updates).toEqual([]);
+    expect(batch.invalid).toHaveLength(1);
+    const [invalid] = batch.invalid;
+    if (invalid === undefined) throw new Error("Expected one quarantined update");
+    expect(invalid.updateId).toBe(10);
+    expect(invalid.error).toBeInstanceOf(TypeError);
+    if (!(invalid.error instanceof TypeError)) throw new Error("Expected a TypeError");
+    expect(invalid.error.message).toContain(message);
+  });
+
+  it("contains malformed updates without dropping valid ones", async () => {
+    const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValue(
+      jsonResponse({
+        ok: true,
+        result: [
+          {
+            update_id: 1,
+            message: {
+              message_id: 7,
+              chat: { id: 5, type: "private" },
+              text: "hello",
+            },
+          },
+          "not-an-update",
+          {
+            update_id: 3,
+            message: {
+              message_id: 8,
+              chat: { id: 5, type: "private" },
+              photo: [{ file_id: "", width: 10, height: 20 }],
+            },
+          },
+        ],
+      }),
+    );
+    const api = createTelegramBotApiClient({ token: "123:test-token", fetch });
+
+    const batch = await api.getUpdates({});
+
+    expect(batch.updates).toHaveLength(1);
+    expect(batch.updates[0]?.update_id).toBe(1);
+    expect(batch.invalid).toHaveLength(2);
+    expect(batch.invalid[0]?.updateId).toBeUndefined();
+    expect(batch.invalid[1]?.updateId).toBe(3);
   });
 
   it("downloads files without exposing the authenticated URL to callers", async () => {

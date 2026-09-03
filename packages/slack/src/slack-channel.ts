@@ -8,11 +8,7 @@ import type {
   ChannelMessageEvent,
   SentChannelMessage,
 } from "@anvia/channel";
-import {
-  splitChannelMessage,
-  validateChannelActions,
-  validateChannelAttachments,
-} from "@anvia/channel";
+import { splitChannelMessage, validateChannelMessage } from "@anvia/channel";
 import { validateSlackId, validateSlackTimestamp } from "./identifiers.js";
 import { normalizeSlackEvent } from "./normalize.js";
 import { SlackSocketTransport } from "./slack-socket-transport.js";
@@ -215,8 +211,7 @@ function validateMessage(message: ChannelMessage): void {
   if (message.text.length > MAX_MESSAGE_LENGTH) {
     throw new RangeError(`Slack message text must not exceed ${MAX_MESSAGE_LENGTH} characters`);
   }
-  validateChannelActions(message.actions);
-  validateChannelAttachments(message.attachments);
+  validateChannelMessage(message);
   if (message.replyToMessageId !== undefined) {
     validateSlackTimestamp(message.replyToMessageId, "Slack reply message ID");
   }
