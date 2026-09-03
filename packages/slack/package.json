@@ -29,7 +29,7 @@
   "dependencies": {
     "@anvia/channel": "workspace:*",
     "@slack/socket-mode": "^3.0.0",
-    "@slack/web-api": "^8.0.0",
+    "@slack/web-api": "^8.1.1",
     "undici": "^7.29.0"
   },
   "repository": {
