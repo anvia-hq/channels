@@ -14,6 +14,8 @@ concurrency:
 jobs:
   publish:
     runs-on: ubuntu-latest
+    # Must match the environment configured on the npm trusted publisher.
+    environment: npmjs
     permissions:
       contents: read
       id-token: write
@@ -27,7 +29,9 @@ jobs:
           registry-url: "https://registry.npmjs.org"
       - run: pnpm install --frozen-lockfile
       - run: pnpm verify:release
-      # Private packages are skipped; remove `private` only for packages meant for npm.
+      - name: Inspect package tarballs
+        run: pnpm -r --if-present exec npm pack --dry-run
+      # Authenticates through the GitHub Actions OIDC token (trusted
+      # publishing) — no NPM_TOKEN secret. Private packages are skipped;
+      # remove `private` only for packages meant for npm.
       - run: pnpm -r --if-present publish --provenance --no-git-checks
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

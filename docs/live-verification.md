@@ -31,11 +31,28 @@ thread. Verify Discord with Message Content Intent enabled and disabled.
 
 ## Publish gate
 
+### One-time trusted publishing setup
+
+Releases authenticate through npm trusted publishing (OIDC) — no npm token is stored in the
+repository:
+
+1. On GitHub, under **Settings → Environments**, create an environment named `npmjs` with a
+   deployment tag policy limited to `v*`.
+2. On npmjs.com, configure a trusted publisher for each package (`@anvia/channel`,
+   `@anvia/channel-agent`, `@anvia/discord`, `@anvia/slack`, `@anvia/telegram`):
+   - Repository: `anvia-hq/channels`
+   - Workflow: `release.yml`
+   - Environment: `npmjs`
+3. Versions are already set to `0.1.0`; publishing stays blocked while packages remain `private`.
+
+### Per release
+
 After the matrix passes:
 
-1. Replace `0.0.0` with the chosen initial version and remove `private` only from packages intended
-   for npm.
-2. Inspect every generated tarball with `pnpm --filter <package> pack --dry-run`.
+1. Remove `private` only from packages intended for npm.
+2. Inspect the generated tarballs (`pnpm --filter <package> pack --dry-run`); the release workflow
+   prints them before publishing.
 3. Confirm `dist` is generated from the reviewed commit and contains no credentials or fixtures.
-4. Publish with provenance from the release workflow, then install each package into an empty test
-   project and run one send/receive smoke test.
+4. Tag the release — `git tag v0.1.0 && git push origin v0.1.0` — the release workflow runs the
+   full gate and publishes with provenance.
+5. Install each published package into an empty test project and run one send/receive smoke test.
