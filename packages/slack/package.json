@@ -1,6 +1,6 @@
 {
   "name": "@anvia/slack",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Slack channel adapter for Anvia.",
   "license": "MIT",
   "type": "module",
@@ -16,7 +16,7 @@
     "dist"
   ],
   "scripts": {
-    "build": "tsup src/index.ts --format esm --dts --sourcemap --clean",
+    "build": "tsup src/index.ts --target node24 --format esm --dts --sourcemap --clean",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"
   },
