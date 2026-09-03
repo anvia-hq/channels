@@ -33,11 +33,9 @@ thread. Verify Discord with Message Content Intent enabled and disabled.
 
 ### One-time trusted publishing setup
 
-Releases authenticate through npm trusted publishing (OIDC) — no npm token is stored in the
-repository:
+1. On GitHub, under **Settings → Environments**, the `npmjs` environment has a `v*` tag policy and
+   `indrazm` as the required reviewer — a dispatch waits for that approval before publishing.
 
-1. On GitHub, under **Settings → Environments**, create an environment named `npmjs` with a
-   deployment tag policy limited to `v*`.
 2. On npmjs.com, configure a trusted publisher for each package (`@anvia/channel`,
    `@anvia/channel-agent`, `@anvia/discord`, `@anvia/slack`, `@anvia/telegram`):
    - Repository: `anvia-hq/channels`
