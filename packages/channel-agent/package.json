@@ -1,6 +1,6 @@
 {
   "name": "@anvia/channel-agent",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "private": true,
   "description": "Anvia agent integration for communication channels.",
   "license": "MIT",
@@ -22,7 +22,7 @@
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
-    "@anvia/core": "^1.0.2",
+    "@anvia/core": "^1.0.9",
     "tsup": "catalog:",
     "typescript": "catalog:",
     "vitest": "catalog:"
@@ -31,7 +31,7 @@
     "@anvia/channel": "workspace:*"
   },
   "peerDependencies": {
-    "@anvia/core": "^1.0.2"
+    "@anvia/core": "^1.0.9"
   },
   "repository": {
     "type": "git",

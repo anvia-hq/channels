@@ -1,0 +1,26 @@
+name: Core canary
+
+on:
+  schedule:
+    # Mondays 06:00 UTC — catches @anvia/core changes between Dependabot PRs.
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  against-latest-core:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: pnpm/action-setup@a7487c7e89a18df4991f7f222e4898a00d66ddda # v4.1.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24
+          cache: pnpm
+      - name: Install against the newest published @anvia/core
+        run: |
+          pnpm install --no-frozen-lockfile
+          pnpm -r update '@anvia/core@latest'
+      - run: pnpm verify:release

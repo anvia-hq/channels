@@ -48,17 +48,17 @@ importers:
         specifier: workspace:*
         version: link:../../packages/channel-agent
       '@anvia/core':
-        specifier: ^1.0.2
-        version: 1.0.2
+        specifier: ^1.0.9
+        version: 1.0.9
       '@anvia/discord':
         specifier: workspace:*
         version: link:../../packages/discord
       '@anvia/memory-sqlite':
-        specifier: ^1.0.2
-        version: 1.0.2(@anvia/core@1.0.2)
+        specifier: ^1.0.9
+        version: 1.0.9(@anvia/core@1.0.9)
       '@anvia/openai':
-        specifier: ^1.0.2
-        version: 1.0.2(@anvia/core@1.0.2)(ws@8.21.3)(zod@4.4.3)
+        specifier: ^1.0.9
+        version: 1.0.9(@anvia/core@1.0.9)(ws@8.21.3)(zod@4.4.3)
     devDependencies:
       tsx:
         specifier: 'catalog:'
@@ -73,14 +73,14 @@ importers:
         specifier: workspace:*
         version: link:../../packages/channel-agent
       '@anvia/core':
-        specifier: ^1.0.2
-        version: 1.0.2
+        specifier: ^1.0.9
+        version: 1.0.9
       '@anvia/memory-sqlite':
-        specifier: ^1.0.2
-        version: 1.0.2(@anvia/core@1.0.2)
+        specifier: ^1.0.9
+        version: 1.0.9(@anvia/core@1.0.9)
       '@anvia/openai':
-        specifier: ^1.0.2
-        version: 1.0.2(@anvia/core@1.0.2)(ws@8.21.3)(zod@4.4.3)
+        specifier: ^1.0.9
+        version: 1.0.9(@anvia/core@1.0.9)(ws@8.21.3)(zod@4.4.3)
       '@anvia/slack':
         specifier: workspace:*
         version: link:../../packages/slack
@@ -98,14 +98,14 @@ importers:
         specifier: workspace:*
         version: link:../../packages/channel-agent
       '@anvia/core':
-        specifier: ^1.0.2
-        version: 1.0.2
+        specifier: ^1.0.9
+        version: 1.0.9
       '@anvia/memory-sqlite':
-        specifier: ^1.0.2
-        version: 1.0.2(@anvia/core@1.0.2)
+        specifier: ^1.0.9
+        version: 1.0.9(@anvia/core@1.0.9)
       '@anvia/openai':
-        specifier: ^1.0.2
-        version: 1.0.2(@anvia/core@1.0.2)(ws@8.21.3)(zod@4.4.3)
+        specifier: ^1.0.9
+        version: 1.0.9(@anvia/core@1.0.9)(ws@8.21.3)(zod@4.4.3)
       '@anvia/telegram':
         specifier: workspace:*
         version: link:../../packages/telegram
@@ -136,8 +136,8 @@ importers:
         version: link:../channel
     devDependencies:
       '@anvia/core':
-        specifier: ^1.0.2
-        version: 1.0.2
+        specifier: ^1.0.9
+        version: 1.0.9
       tsup:
         specifier: 'catalog:'
         version: 8.5.1(postcss@8.5.26)(tsx@4.23.12)(typescript@5.9.3)(yaml@2.9.0)
@@ -210,23 +210,18 @@ importers:
 
 packages:
 
-  '@anvia/core@1.0.2':
-    resolution: {integrity: sha512-IIEclnYQ/56uyvc1QqDmd+f742xNrwApa7caoJtKgvjVfyVn7mKLXoTXCDa7RPpCrMSsMpPWuLKPzoHqoDN4Fg==}
-    peerDependencies:
-      pdfjs-dist: ^6.2.108
-    peerDependenciesMeta:
-      pdfjs-dist:
-        optional: true
+  '@anvia/core@1.0.9':
+    resolution: {integrity: sha512-7pYzRi2yfKjzEjktw9fHMhYK69/hYWN4fzJSPI82S0Fc5jNUn2xucpILVdlQhbZfS1P45eP2QqurZALkpGwwQA==}
 
-  '@anvia/memory-sqlite@1.0.2':
-    resolution: {integrity: sha512-kFO5j9qkOt03cphWAbF111QUnsjJPgFxgPQKlf478GMnnkHPMX2EQSrs7/11Ys5iRQ8mQFp5nEFsWk0DUcJuww==}
+  '@anvia/memory-sqlite@1.0.9':
+    resolution: {integrity: sha512-EdjHUZZNRkPW7qjoYc6mTSowLjhZzQa27+RFIQOw3LYB2Zuh8DECjJM2fGRDiCNN13SHJGCG/YsC8MaNDlBfvQ==}
     peerDependencies:
-      '@anvia/core': 1.0.2
+      '@anvia/core': 1.0.9
 
-  '@anvia/openai@1.0.2':
-    resolution: {integrity: sha512-zEO1xpRpwDaHkkPke6fLoyE6AC9kF3zGDH0iXJdi8tPkeq3CLD5e1iN3dJcYajKhsZQfeqxKGS8uz9/9Y+b6Rw==}
+  '@anvia/openai@1.0.9':
+    resolution: {integrity: sha512-9rTILKTYnRE2QAgNiXUIgxI4vfTKXNAvv8g58Rthde02R0t5YYhCSFwgOMUrR/GUy2uVO3/gdG7rABhEMpefEQ==}
     peerDependencies:
-      '@anvia/core': 1.0.2
+      '@anvia/core': 1.0.9
 
   '@discordjs/builders@1.14.1':
     resolution: {integrity: sha512-gSKkhXLqs96TCzk66VZuHHl8z2bQMJFGwrXC0f33ngK+FLNau4hU1PYny3DNJfNdSH+gVMzE85/d5FQ2BpcNwQ==}
@@ -1731,18 +1726,18 @@ packages:
 
 snapshots:
 
-  '@anvia/core@1.0.2':
+  '@anvia/core@1.0.9':
     dependencies:
       yaml: 2.9.0
       zod: 4.4.3
 
-  '@anvia/memory-sqlite@1.0.2(@anvia/core@1.0.2)':
+  '@anvia/memory-sqlite@1.0.9(@anvia/core@1.0.9)':
     dependencies:
-      '@anvia/core': 1.0.2
+      '@anvia/core': 1.0.9
 
-  '@anvia/openai@1.0.2(@anvia/core@1.0.2)(ws@8.21.3)(zod@4.4.3)':
+  '@anvia/openai@1.0.9(@anvia/core@1.0.9)(ws@8.21.3)(zod@4.4.3)':
     dependencies:
-      '@anvia/core': 1.0.2
+      '@anvia/core': 1.0.9
       openai: 7.5.0(ws@8.21.3)(zod@4.4.3)
     transitivePeerDependencies:
       - '@aws-sdk/credential-provider-node'
