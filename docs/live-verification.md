@@ -52,5 +52,9 @@ After the matrix passes:
    prints them before publishing.
 3. Confirm `dist` is generated from the reviewed commit and contains no credentials or fixtures.
 4. Dispatch the release — GitHub → **Actions → Release → Run workflow** on `main`. The workflow
-   refuses a stale `main`, runs the full gate, publishes with provenance, then tags `v0.1.0` and
-   creates the GitHub release. Commits and pushes made after dispatching are not published.
+   refuses a stale `main`, runs the full gate, publishes with provenance, then tags the released
+   version and creates the GitHub release. Commits and pushes made after dispatching are not
+   published.
+
+npm's CLI web-auth URLs are single-use: once an approval completes, reopening the URL returns 404.
+A clean process exit means the operation succeeded regardless of how the URL behaves afterwards.
