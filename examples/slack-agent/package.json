@@ -15,7 +15,7 @@
   "dependencies": {
     "@anvia/channel-agent": "workspace:*",
     "@anvia/core": "^1.0.2",
-    "@anvia/memory-sqlite": "^1.0.2",
+    "@anvia/memory-sqlite": "^1.0.9",
     "@anvia/openai": "^1.0.2",
     "@anvia/slack": "workspace:*"
   }
