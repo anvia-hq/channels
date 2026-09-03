@@ -1,7 +1,6 @@
 {
   "name": "@anvia/channel",
   "version": "0.1.0",
-  "private": true,
   "description": "Platform-neutral communication channel contracts for Anvia.",
   "license": "MIT",
   "type": "module",

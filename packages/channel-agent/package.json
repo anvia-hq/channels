@@ -1,7 +1,6 @@
 {
   "name": "@anvia/channel-agent",
   "version": "0.1.0",
-  "private": true,
   "description": "Anvia agent integration for communication channels.",
   "license": "MIT",
   "type": "module",
