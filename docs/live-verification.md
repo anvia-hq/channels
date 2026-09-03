@@ -53,6 +53,6 @@ After the matrix passes:
 2. Inspect the generated tarballs (`pnpm --filter <package> pack --dry-run`); the release workflow
    prints them before publishing.
 3. Confirm `dist` is generated from the reviewed commit and contains no credentials or fixtures.
-4. Tag the release — `git tag v0.1.0 && git push origin v0.1.0` — the release workflow runs the
-   full gate and publishes with provenance.
-5. Install each published package into an empty test project and run one send/receive smoke test.
+4. Dispatch the release — GitHub → **Actions → Release → Run workflow** on `main`. The workflow
+   refuses a stale `main`, runs the full gate, publishes with provenance, then tags `v0.1.0` and
+   creates the GitHub release. Commits and pushes made after dispatching are not published.
