@@ -45,10 +45,10 @@ import { discord } from "@anvia/discord";
 
 const channel = discord({ token: process.env.DISCORD_BOT_TOKEN! });
 
-const sent = await sendChannelMessage(
+const sent = await sendChannelMessage({
   channel,
-  { platform: "discord", conversationId: process.env.DISCORD_CHANNEL_ID! },
-  {
+  address: { platform: "discord", conversationId: process.env.DISCORD_CHANNEL_ID! },
+  message: {
     text: "Build 184 passed.",
     attachments: [
       {
@@ -60,7 +60,7 @@ const sent = await sendChannelMessage(
     ],
     actions: [{ id: "build:184:details", label: "Show details", style: "primary" }],
   },
-);
+});
 
 console.log(sent.map((message) => message.id));
 ```
@@ -93,8 +93,10 @@ await channel.start(async (event) => {
     address.threadId = event.conversation.threadId;
   }
 
-  await sendChannelMessage(channel, address, {
-    text: `Received ${event.text.length} characters.`,
+  await sendChannelMessage({
+    channel,
+    address,
+    message: { text: `Received ${event.text.length} characters.` },
   });
 });
 ```

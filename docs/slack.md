@@ -66,10 +66,10 @@ Outbound Web API calls do not require Socket Mode to be started:
 ```ts
 import { sendChannelMessage } from "@anvia/channel";
 
-await sendChannelMessage(
+await sendChannelMessage({
   channel,
-  { platform: "slack", conversationId: process.env.SLACK_CHANNEL_ID! },
-  {
+  address: { platform: "slack", conversationId: process.env.SLACK_CHANNEL_ID! },
+  message: {
     text: "The import needs review.",
     attachments: [
       {
@@ -80,7 +80,7 @@ await sendChannelMessage(
       },
     ],
   },
-);
+});
 ```
 
 Text is posted first and files are uploaded sequentially with `files.uploadV2`. A multi-file

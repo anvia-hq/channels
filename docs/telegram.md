@@ -97,10 +97,10 @@ Bot API delivery does not require the receive loop to be started:
 ```ts
 import { sendChannelMessage } from "@anvia/channel";
 
-await sendChannelMessage(
+await sendChannelMessage({
   channel,
-  { platform: "telegram", conversationId: "-1001234567890", threadId: "42" },
-  {
+  address: { platform: "telegram", conversationId: "-1001234567890", threadId: "42" },
+  message: {
     text: "Release candidate ready.",
     replyToMessageId: "1234",
     actions: [
@@ -108,7 +108,7 @@ await sendChannelMessage(
       { id: "release:deny", label: "Deny", style: "danger" },
     ],
   },
-);
+});
 ```
 
 Numeric chat IDs may be negative. Public channel targets may use an `@username`. Message IDs and

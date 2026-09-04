@@ -69,11 +69,11 @@ import { telegram } from "@anvia/telegram";
 
 const channel = telegram({ token: process.env.TELEGRAM_BOT_TOKEN! });
 
-await sendChannelMessage(
+await sendChannelMessage({
   channel,
-  { platform: "telegram", conversationId: "-1001234567890" },
-  { text: "The nightly import completed." },
-);
+  address: { platform: "telegram", conversationId: "-1001234567890" },
+  message: { text: "The nightly import completed." },
+});
 ```
 
 ### Receiving bot or agent

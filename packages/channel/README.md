@@ -21,8 +21,10 @@ clean up or resume without resending it.
 ```ts
 import { sendChannelMessage } from "@anvia/channel";
 
-const sent = await sendChannelMessage(channel, address, {
-  text: report,
+const sent = await sendChannelMessage({
+  channel,
+  address,
+  message: { text: report },
 });
 ```
 
@@ -49,8 +51,9 @@ text-only adapters can omit `capabilities`; callers should then use a textual fa
 Custom adapters implement `splitMessage(message)` in addition to lifecycle and send, plus
 `loadAttachment` if they emit attachment metadata. The split method must return at least one
 non-empty message and preserve the original content when its text parts are concatenated.
-`splitChannelMessage(message, maximumLength)` provides a whitespace-aware, surrogate-safe default
-that also preserves actions. `splitChannelText(text, maximumLength)` remains available for raw text.
+`splitChannelMessage({ message, maximumLength })` provides a whitespace-aware, surrogate-safe
+default that also preserves actions. `splitChannelText({ text, maximumLength })` remains available
+for raw text.
 
 ## Outbound media and lifecycle operations
 

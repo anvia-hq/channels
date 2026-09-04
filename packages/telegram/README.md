@@ -35,7 +35,7 @@ await channel.start(async (event) => {
     address.threadId = event.conversation.threadId;
   }
 
-  await sendChannelMessage(channel, address, { text: `Received: ${event.text}` });
+  await sendChannelMessage({ channel, address, message: { text: `Received: ${event.text}` } });
 });
 
 // During graceful application shutdown:

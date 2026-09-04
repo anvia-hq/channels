@@ -53,8 +53,8 @@ const service = createChannelAgent({
 });
 ```
 
-Custom prompt builders receive the channel and abort signal as their second argument. Use the
-exported helper when adding application-specific text while preserving attachments:
+Custom prompt builders receive a request object with the event, the channel, and an abort signal.
+Use the exported helper when adding application-specific text while preserving attachments:
 
 ```ts
 import { channelMessagePrompt, createChannelAgent } from "@anvia/channel-agent";
@@ -62,9 +62,11 @@ import { channelMessagePrompt, createChannelAgent } from "@anvia/channel-agent";
 const service = createChannelAgent({
   channel,
   agent,
-  async createPrompt(event, context) {
-    const prompt = await channelMessagePrompt(context.channel, event, {
-      signal: context.abortSignal,
+  async createPrompt(request) {
+    const prompt = await channelMessagePrompt({
+      channel: request.context.channel,
+      event: request.event,
+      signal: request.context.abortSignal,
     });
     // Return `prompt` directly, or transform its user content for your application.
     return prompt;
@@ -142,7 +144,8 @@ outbound files.
 Continuation stores and resumed tools do not provide exactly-once execution; make externally
 mutating tools idempotent when retries are possible.
 
-Interaction stores atomically `take(key, interactionId)` a continuation before resuming it. Durable
+Interaction stores atomically `take({ key, interactionId })` a continuation before resuming it.
+Durable
 implementations should use a transaction or compare-and-delete operation so two application
 instances cannot accept the same response concurrently. A failed resume restores the continuation
 for retry, so external tool side effects still require idempotency.

@@ -128,7 +128,7 @@ export class TelegramChannel implements Channel<TelegramUpdate> {
   }
 
   splitMessage(message: ChannelMessage): readonly ChannelMessage[] {
-    return splitChannelMessage(message, MAX_MESSAGE_LENGTH);
+    return splitChannelMessage({ message, maximumLength: MAX_MESSAGE_LENGTH });
   }
 
   loadAttachment(

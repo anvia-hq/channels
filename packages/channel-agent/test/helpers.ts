@@ -35,7 +35,7 @@ export class FakeChannel implements Channel {
 
   splitMessage(message: ChannelMessage): readonly ChannelMessage[] {
     this.splitCount += 1;
-    return splitChannelMessage(message, this.maximumMessageLength);
+    return splitChannelMessage({ message, maximumLength: this.maximumMessageLength });
   }
 
   async loadAttachment(

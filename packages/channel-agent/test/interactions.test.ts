@@ -15,14 +15,21 @@ describe("channel agent interactions", () => {
     if (outcome.type !== "interaction") throw new Error("Expected an interaction outcome");
     const pending = { continuation: outcome.continuation, interaction: outcome.interaction };
 
-    expect(renderChannelAgentInteraction(pending)).toContain('"recipient": "person@example.com"');
-    expect(renderChannelAgentInteraction(pending)).toContain('Reply "approve" or "deny".');
-    expect(parseChannelAgentInteractionResponse(messageEvent({ text: "YES" }), pending)).toEqual({
+    expect(renderChannelAgentInteraction({ pending })).toContain(
+      '"recipient": "person@example.com"',
+    );
+    expect(renderChannelAgentInteraction({ pending })).toContain('Reply "approve" or "deny".');
+    expect(
+      parseChannelAgentInteractionResponse({ event: messageEvent({ text: "YES" }), pending }),
+    ).toEqual({
       type: "tool-approval",
       approved: true,
     });
     expect(
-      parseChannelAgentInteractionResponse(messageEvent({ text: "maybe" }), pending),
+      parseChannelAgentInteractionResponse({
+        event: messageEvent({ text: "maybe" }),
+        pending,
+      }),
     ).toBeUndefined();
   });
 
@@ -38,12 +45,15 @@ describe("channel agent interactions", () => {
     const approve = actions?.find((action) => action.label === "Approve");
     if (approve === undefined) throw new Error("Expected an approval action");
 
-    expect(parseChannelAgentActionResponse(actionEvent(approve.id), pending)).toEqual({
+    expect(parseChannelAgentActionResponse({ event: actionEvent(approve.id), pending })).toEqual({
       type: "tool-approval",
       approved: true,
     });
     expect(
-      parseChannelAgentActionResponse(actionEvent("anvia:stale-token:approve"), pending),
+      parseChannelAgentActionResponse({
+        event: actionEvent("anvia:stale-token:approve"),
+        pending,
+      }),
     ).toBeUndefined();
   });
 
@@ -66,7 +76,7 @@ describe("channel agent interactions", () => {
       },
     };
 
-    const rendered = renderChannelAgentInteraction(pending);
+    const rendered = renderChannelAgentInteraction({ pending });
 
     expect(rendered).toContain('"recipient": "person@example.com"');
     expect(rendered).toContain('"apiKey": "[redacted]"');
@@ -108,10 +118,10 @@ describe("channel agent interactions", () => {
     };
 
     expect(
-      parseChannelAgentInteractionResponse(
-        messageEvent({ text: "1. Production\n2. Customer request" }),
+      parseChannelAgentInteractionResponse({
+        event: messageEvent({ text: "1. Production\n2. Customer request" }),
         pending,
-      ),
+      }),
     ).toEqual({
       type: "tool-question",
       answers: [
@@ -179,9 +189,9 @@ describe("channel agent interactions", () => {
     const store = new MemoryChannelAgentInteractionStore();
     store.set("key", pending);
 
-    expect(store.take("key", "different")).toBeUndefined();
-    expect(store.take("key", outcome.interaction.id)).toBe(pending);
-    expect(store.take("key", outcome.interaction.id)).toBeUndefined();
+    expect(store.take({ key: "key", interactionId: "different" })).toBeUndefined();
+    expect(store.take({ key: "key", interactionId: outcome.interaction.id })).toBe(pending);
+    expect(store.take({ key: "key", interactionId: outcome.interaction.id })).toBeUndefined();
   });
 
   it("scopes pending interactions to the conversation and sender", () => {

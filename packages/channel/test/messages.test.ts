@@ -21,7 +21,7 @@ describe("channel message delivery", () => {
   it("splits text at readable boundaries without changing its contents", () => {
     const text = "first line\nsecond line is longer";
 
-    const parts = splitChannelText(text, 12);
+    const parts = splitChannelText({ text, maximumLength: 12 });
 
     expect(parts.every((part) => part.length <= 12)).toBe(true);
     expect(parts.join("")).toBe(text);
@@ -29,10 +29,13 @@ describe("channel message delivery", () => {
 
   it("places actions only on the final split message", () => {
     expect(
-      splitChannelMessage(
-        { text: "abcdefgh", actions: [{ id: "approve", label: "Approve", style: "primary" }] },
-        3,
-      ),
+      splitChannelMessage({
+        message: {
+          text: "abcdefgh",
+          actions: [{ id: "approve", label: "Approve", style: "primary" }],
+        },
+        maximumLength: 3,
+      }),
     ).toEqual([
       { text: "abc" },
       { text: "def" },
@@ -69,17 +72,21 @@ describe("channel message delivery", () => {
 
     expect(() => validateChannelAttachments([attachment])).not.toThrow();
     expect(
-      splitChannelMessage(
-        { text: "abcdef", replyToMessageId: "message-1", attachments: [attachment] },
-        3,
-      ),
+      splitChannelMessage({
+        message: {
+          text: "abcdef",
+          replyToMessageId: "message-1",
+          attachments: [attachment],
+        },
+        maximumLength: 3,
+      }),
     ).toEqual([
       { text: "abc", replyToMessageId: "message-1" },
       { text: "def", replyToMessageId: "message-1", attachments: [attachment] },
     ]);
-    expect(splitChannelMessage({ text: "", attachments: [attachment] }, 3)).toEqual([
-      { text: "", attachments: [attachment] },
-    ]);
+    expect(
+      splitChannelMessage({ message: { text: "", attachments: [attachment] }, maximumLength: 3 }),
+    ).toEqual([{ text: "", attachments: [attachment] }]);
     expect(() =>
       validateChannelAttachments([
         { ...attachment, source: { type: "url", url: "http://insecure.example/report.pdf" } },
@@ -101,15 +108,24 @@ describe("channel message delivery", () => {
   });
 
   it("does not split a surrogate pair", () => {
-    expect(splitChannelText("1234😀6789", 5)).toEqual(["1234", "😀678", "9"]);
-    expect(() => splitChannelText("😀", 1)).toThrow("cannot preserve a Unicode character");
+    expect(splitChannelText({ text: "1234😀6789", maximumLength: 5 })).toEqual([
+      "1234",
+      "😀678",
+      "9",
+    ]);
+    expect(() => splitChannelText({ text: "😀", maximumLength: 1 })).toThrow(
+      "cannot preserve a Unicode character",
+    );
   });
 
   it("sends every platform-prepared message part in order", async () => {
     const channel = new SplittingChannel(5);
     const address = { platform: "test", conversationId: "conversation" };
-
-    const sent = await sendChannelMessage(channel, address, { text: "abcdefghijk" });
+    const sent = await sendChannelMessage({
+      channel,
+      address,
+      message: { text: "abcdefghijk" },
+    });
 
     expect(channel.send).toHaveBeenCalledTimes(3);
     expect(channel.send.mock.calls.map((call) => call[1].text)).toEqual(["abcde", "fghij", "k"]);
@@ -121,22 +137,25 @@ describe("channel message delivery edges", () => {
   const address: ChannelAddress = { platform: "test", conversationId: "c1" };
 
   it("rejects empty text and invalid maximum lengths", () => {
-    expect(() => splitChannelText("", 10)).toThrow(/empty/);
-    expect(() => splitChannelText("hello", 0)).toThrow(TypeError);
-    expect(() => splitChannelText("hello", -5)).toThrow(TypeError);
-    expect(() => splitChannelText("hello", 2.5)).toThrow(TypeError);
+    expect(() => splitChannelText({ text: "", maximumLength: 10 })).toThrow(/empty/);
+    expect(() => splitChannelText({ text: "hello", maximumLength: 0 })).toThrow(TypeError);
+    expect(() => splitChannelText({ text: "hello", maximumLength: -5 })).toThrow(TypeError);
+    expect(() => splitChannelText({ text: "hello", maximumLength: 2.5 })).toThrow(TypeError);
   });
 
   it("keeps text unchanged when it already fits", () => {
-    expect(splitChannelText("abcdefghij", 10)).toEqual(["abcdefghij"]);
+    expect(splitChannelText({ text: "abcdefghij", maximumLength: 10 })).toEqual(["abcdefghij"]);
   });
 
   it("prefers newline boundaries over spaces", () => {
-    expect(splitChannelText("one\ntwo three", 9)).toEqual(["one\n", "two three"]);
+    expect(splitChannelText({ text: "one\ntwo three", maximumLength: 9 })).toEqual([
+      "one\n",
+      "two three",
+    ]);
   });
 
   it("throws when a single character cannot fit", () => {
-    expect(() => splitChannelText("a🇺🇸b", 1)).toThrow(RangeError);
+    expect(() => splitChannelText({ text: "a🇺🇸b", maximumLength: 1 })).toThrow(RangeError);
   });
 
   it("enforces the action id byte limit in UTF-8", () => {
@@ -153,7 +172,7 @@ describe("channel message delivery edges", () => {
     const channel = {
       platform: "test",
       splitMessage: (message: ChannelMessage) =>
-        splitChannelText(message.text, 5).map((text) => ({ text })),
+        splitChannelText({ text: message.text, maximumLength: 5 }).map((text) => ({ text })),
       async start(): Promise<void> {},
       async stop(): Promise<void> {},
       async edit(): Promise<void> {},
@@ -164,9 +183,11 @@ describe("channel message delivery edges", () => {
       },
     } satisfies Channel;
 
-    const failure = await sendChannelMessage(channel, address, { text: "abcdefghij" }).catch(
-      (error: unknown) => error,
-    );
+    const failure = await sendChannelMessage({
+      channel,
+      address,
+      message: { text: "abcdefghij" },
+    }).catch((error: unknown) => error);
     if (!(failure instanceof PartialDeliveryError)) throw new Error("Expected partial failure");
 
     expect(failure.sent).toEqual([{ id: "1", address }]);
@@ -187,9 +208,9 @@ describe("channel message delivery edges", () => {
       },
     };
 
-    await expect(sendChannelMessage(channel, address, { text: "hello" })).rejects.toThrow(
-      "at least one message",
-    );
+    await expect(
+      sendChannelMessage({ channel, address, message: { text: "hello" } }),
+    ).rejects.toThrow("at least one message");
   });
 
   it("validates the complete outbound message payload", () => {
@@ -224,7 +245,9 @@ class SplittingChannel implements Channel {
   constructor(private readonly maximumLength: number) {}
 
   splitMessage(message: ChannelMessage): readonly ChannelMessage[] {
-    return splitChannelText(message.text, this.maximumLength).map((text) => ({ text }));
+    return splitChannelText({ text: message.text, maximumLength: this.maximumLength }).map(
+      (text) => ({ text }),
+    );
   }
 
   async start(_handler: ChannelEventHandler): Promise<void> {}

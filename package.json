@@ -11,6 +11,7 @@
     "build": "pnpm -r --if-present build",
     "check": "pnpm format:check && pnpm lint",
     "check:fix": "pnpm lint:fix && pnpm format",
+    "changeset": "changeset",
     "example:discord": "pnpm --filter @anvia/example-discord-agent start",
     "example:slack": "pnpm --filter @anvia/example-slack-agent start",
     "example:telegram": "pnpm --filter @anvia/example-telegram-agent start",
@@ -23,6 +24,7 @@
     "verify:release": "pnpm check && pnpm typecheck && pnpm build && pnpm test"
   },
   "devDependencies": {
+    "@changesets/cli": "^2.31.0",
     "@types/node": "^24.9.1",
     "oxfmt": "0.64.0",
     "oxlint": "^1.79.0",

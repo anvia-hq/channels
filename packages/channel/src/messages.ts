@@ -7,7 +7,10 @@ export const MAX_CHANNEL_ACTION_ID_BYTES = 64;
 export const MAX_CHANNEL_ACTION_LABEL_LENGTH = 80;
 export const MAX_CHANNEL_ATTACHMENTS = 10;
 
-export function splitChannelText(text: string, maximumLength: number): readonly string[] {
+export function splitChannelText(
+  options: Readonly<{ text: string; maximumLength: number }>,
+): readonly string[] {
+  const { text, maximumLength } = options;
   if (typeof text !== "string" || text.length === 0) {
     throw new TypeError("Channel message text must not be empty");
   }
@@ -33,17 +36,18 @@ export function splitChannelText(text: string, maximumLength: number): readonly 
     parts.push(text.slice(start, end));
     start = end;
   }
+
   return parts;
 }
 
 export function splitChannelMessage(
-  message: ChannelMessage,
-  maximumLength: number,
+  options: Readonly<{ message: ChannelMessage; maximumLength: number }>,
 ): readonly ChannelMessage[] {
+  const { message, maximumLength } = options;
   const textParts =
     message.text.length === 0 && message.attachments !== undefined
       ? [""]
-      : splitChannelText(message.text, maximumLength);
+      : splitChannelText({ text: message.text, maximumLength });
   return textParts.map((text, index) => {
     const part: {
       text: string;
@@ -203,26 +207,31 @@ export class PartialDeliveryError extends Error {
   readonly failedIndex: number;
 
   constructor(
-    sent: readonly SentChannelMessage[],
-    failedPart: ChannelMessage,
-    failedIndex: number,
-    options: { cause?: unknown } = {},
+    options: Readonly<{
+      sent: readonly SentChannelMessage[];
+      failedPart: ChannelMessage;
+      failedIndex: number;
+      cause?: unknown;
+    }>,
   ) {
-    super(`Channel message delivery failed after ${sent.length} delivered part(s)`, {
+    super(`Channel message delivery failed after ${options.sent.length} delivered part(s)`, {
       cause: options.cause,
     });
     this.name = "PartialDeliveryError";
-    this.sent = sent;
-    this.failedPart = failedPart;
-    this.failedIndex = failedIndex;
+    this.sent = options.sent;
+    this.failedPart = options.failedPart;
+    this.failedIndex = options.failedIndex;
   }
 }
 
 export async function sendChannelMessage<RawEvent>(
-  channel: Channel<RawEvent>,
-  address: ChannelAddress,
-  message: ChannelMessage,
+  request: Readonly<{
+    channel: Channel<RawEvent>;
+    address: ChannelAddress;
+    message: ChannelMessage;
+  }>,
 ): Promise<readonly SentChannelMessage[]> {
+  const { channel, address, message } = request;
   validateChannelMessage(message);
   const parts = channel.splitMessage(message);
   if (parts.length === 0) {
@@ -233,7 +242,7 @@ export async function sendChannelMessage<RawEvent>(
     try {
       sent.push(await channel.send(address, part));
     } catch (error) {
-      throw new PartialDeliveryError(sent, part, index, { cause: error });
+      throw new PartialDeliveryError({ sent, failedPart: part, failedIndex: index, cause: error });
     }
   }
   return sent;

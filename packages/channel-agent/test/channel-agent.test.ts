@@ -404,10 +404,12 @@ describe("ChannelAgentService", () => {
     expect(channel.sent[0]?.message.actions).toEqual([
       { id: "custom:allow", label: "Allow", style: "primary" },
     ]);
-    expect(parseAction).toHaveBeenCalledWith(
-      expect.objectContaining({ type: "action", actionId: "custom:allow" }),
-      expect.objectContaining({ interaction: expect.objectContaining({ id: "interaction-1" }) }),
-    );
+    expect(parseAction).toHaveBeenCalledWith({
+      event: expect.objectContaining({ type: "action", actionId: "custom:allow" }),
+      pending: expect.objectContaining({
+        interaction: expect.objectContaining({ id: "interaction-1" }),
+      }),
+    });
     expect(resume).toHaveBeenCalledWith(
       expect.objectContaining({ sourceRunId: "run-1" }),
       { type: "tool-approval", approved: true },
@@ -603,9 +605,9 @@ describe("ChannelAgentService", () => {
       channel,
       agent: fakeAgent<{ answer: number }>({ generate, streaming: false }),
       streaming: { placeholder: false },
-      createPrompt: (event) => `Channel message: ${event.text}`,
+      createPrompt: ({ event }) => `Channel message: ${event.text}`,
       createSession: () => ({ sessionId: "custom", userId: "custom-user" }),
-      renderOutcome: (outcome) =>
+      renderOutcome: ({ outcome }) =>
         outcome.type === "response" ? String(outcome.output.answer) : outcome.text,
     });
 

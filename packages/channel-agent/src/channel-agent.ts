@@ -162,7 +162,7 @@ export class ChannelAgentService<RawEvent = unknown, Output = string> {
     }
     let response: AgentInteractionResponse | undefined;
     try {
-      response = await interactions.parseAction(event, pending);
+      response = await interactions.parseAction({ event, pending });
     } catch (error) {
       await this.handleFailure(error, "interaction", event, undefined, signal);
       return;
@@ -195,7 +195,10 @@ export class ChannelAgentService<RawEvent = unknown, Output = string> {
     let session: MemoryScope | undefined;
     try {
       [prompt, session] = await Promise.all([
-        this.options.createPrompt(event, { channel: this.options.channel, abortSignal: signal }),
+        this.options.createPrompt({
+          event,
+          context: { channel: this.options.channel, abortSignal: signal },
+        }),
         this.options.createSession(event),
       ]);
     } catch (error) {
@@ -286,7 +289,7 @@ export class ChannelAgentService<RawEvent = unknown, Output = string> {
     if (text.length === 0 && message.attachments === undefined) return;
     const parts = this.messageParts(message);
     if (provisional === undefined) {
-      await sendChannelMessage(this.options.channel, address, message);
+      await sendChannelMessage({ channel: this.options.channel, address, message });
       return;
     }
     if (message.attachments !== undefined) {
@@ -294,7 +297,7 @@ export class ChannelAgentService<RawEvent = unknown, Output = string> {
       if (deleteMessage === undefined) {
         throw new Error("Attachment delivery with a placeholder requires channel deletion support");
       }
-      await sendChannelMessage(this.options.channel, address, message);
+      await sendChannelMessage({ channel: this.options.channel, address, message });
       await deleteMessage.call(this.options.channel, provisional);
       return;
     }
@@ -337,7 +340,7 @@ export class ChannelAgentService<RawEvent = unknown, Output = string> {
         }
         await this.options.interactions.store.set(channelInteractionKey(event), pending);
         const rendered = responseMessage(
-          await this.options.interactions.render(pending, event),
+          await this.options.interactions.render({ pending, event }),
           this.options.emptyResponseMessage,
         );
         const actions = channelInteractionActions(pending);
@@ -347,7 +350,7 @@ export class ChannelAgentService<RawEvent = unknown, Output = string> {
             : { ...rendered, actions };
       } else {
         response = responseMessage(
-          await this.options.renderOutcome(outcome, event),
+          await this.options.renderOutcome({ outcome, event }),
           this.options.emptyResponseMessage,
         );
       }
@@ -382,10 +385,10 @@ export class ChannelAgentService<RawEvent = unknown, Output = string> {
       cancelKeyword !== false &&
       event.text.trim().toLowerCase() === cancelKeyword.trim().toLowerCase()
     ) {
-      const claimed = await interactions.store.take(
-        channelInteractionKey(event),
-        pending.interaction.id,
-      );
+      const claimed = await interactions.store.take({
+        key: channelInteractionKey(event),
+        interactionId: pending.interaction.id,
+      });
       if (claimed === undefined) {
         await this.deliverInteractionNotice(event, interactions.expiredInteractionMessage);
         return;
@@ -398,7 +401,7 @@ export class ChannelAgentService<RawEvent = unknown, Output = string> {
 
     let response: AgentInteractionResponse | undefined;
     try {
-      response = await interactions.parseResponse(event, pending);
+      response = await interactions.parseResponse({ event, pending });
     } catch (error) {
       await this.handleFailure(error, "interaction", event, undefined, signal);
       return;
@@ -438,7 +441,7 @@ export class ChannelAgentService<RawEvent = unknown, Output = string> {
     const key = channelInteractionKey(event);
     let claimed: PendingChannelAgentInteraction | undefined;
     try {
-      claimed = await interactions.store.take(key, pending.interaction.id);
+      claimed = await interactions.store.take({ key, interactionId: pending.interaction.id });
     } catch (error) {
       await this.handleFailure(error, "interaction", event, undefined, signal);
       return;
@@ -491,7 +494,10 @@ export class ChannelAgentService<RawEvent = unknown, Output = string> {
     const interactions = this.options.interactions;
     if (interactions === false) return;
     try {
-      await interactions.store.delete(channelInteractionKey(event), pending.interaction.id);
+      await interactions.store.delete({
+        key: channelInteractionKey(event),
+        interactionId: pending.interaction.id,
+      });
     } catch (error) {
       await this.reportError(error, { stage: "interaction", event });
     }
@@ -630,15 +636,15 @@ function resolveOptions<RawEvent, Output>(
     shouldHandle: options.shouldHandle ?? defaultShouldHandleChannelEvent,
     createPrompt:
       options.createPrompt ??
-      ((event, context) => {
+      ((request) => {
+        const { event, context } = request;
         if (multimodal === false && event.attachments.length > 0) {
           throw new TypeError("Channel agent multimodal prompts are disabled");
         }
-        if (multimodal === false) {
-          return channelMessagePrompt(context.channel, event, { signal: context.abortSignal });
-        }
-        return channelMessagePrompt(context.channel, event, {
-          ...multimodal,
+        return channelMessagePrompt({
+          channel: context.channel,
+          event,
+          ...(multimodal === false ? {} : multimodal),
           signal: context.abortSignal,
         });
       }),
@@ -704,7 +710,13 @@ function defaultCreateSession<Output>(
   return defaultChannelAgentSession;
 }
 
-function defaultRenderOutcome<Output>(outcome: AgentOutcome<Output>): string {
+function defaultRenderOutcome<Output>(
+  request: Readonly<{
+    outcome: AgentOutcome<Output>;
+    event: ChannelEvent;
+  }>,
+): string {
+  const outcome = request.outcome;
   if (outcome.text.length > 0) return outcome.text;
   if (outcome.type === "blocked") return outcome.message ?? outcome.reason;
   if (outcome.type === "interaction") {

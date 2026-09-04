@@ -12,14 +12,17 @@ const DEFAULT_MAXIMUM_ATTACHMENT_BYTES = 20 * 1024 * 1024;
 const DEFAULT_MAXIMUM_TOTAL_ATTACHMENT_BYTES = 50 * 1024 * 1024;
 const DEFAULT_ATTACHMENT_CONCURRENCY = 2;
 
-export type ChannelMessagePromptOptions = ChannelAgentMultimodalOptions &
-  Readonly<{ signal?: AbortSignal }>;
+export type ChannelMessagePromptOptions<RawEvent = unknown> = ChannelAgentMultimodalOptions &
+  Readonly<{
+    channel: Channel<RawEvent>;
+    event: ChannelMessageEvent<RawEvent>;
+    signal?: AbortSignal;
+  }>;
 
 export async function channelMessagePrompt<RawEvent>(
-  channel: Channel<RawEvent>,
-  event: ChannelMessageEvent<RawEvent>,
-  options: ChannelMessagePromptOptions = {},
+  options: ChannelMessagePromptOptions<RawEvent>,
 ): Promise<AgentPrompt> {
+  const { channel, event, signal } = options;
   if (event.attachments.length === 0) return event.text;
 
   const policy = resolveMultimodalOptions(options);
@@ -34,7 +37,7 @@ export async function channelMessagePrompt<RawEvent>(
   const data = await loadAttachments(
     event.attachments,
     policy.attachmentConcurrency,
-    async (attachment) => loadAttachment.call(channel, event, attachment, options.signal),
+    async (attachment) => loadAttachment.call(channel, event, attachment, signal),
     policy,
   );
   for (const [index, attachment] of event.attachments.entries()) {

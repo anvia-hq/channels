@@ -55,21 +55,25 @@ and the helper sends the resulting parts sequentially:
 ```ts
 import { sendChannelMessage } from "@anvia/channel";
 
-const messages = await sendChannelMessage(channel, address, {
-  text: report,
-  replyToMessageId: sourceMessageId,
-  actions: [
-    { id: "report:acknowledge", label: "Acknowledge", style: "primary" },
-    { id: "report:dismiss", label: "Dismiss", style: "danger" },
-  ],
-  attachments: [
-    {
-      type: "file",
-      mediaType: "text/csv",
-      filename: "report.csv",
-      source: { type: "data", data: csvBuffer.toString("base64") },
-    },
-  ],
+const messages = await sendChannelMessage({
+  channel,
+  address,
+  message: {
+    text: report,
+    replyToMessageId: sourceMessageId,
+    actions: [
+      { id: "report:acknowledge", label: "Acknowledge", style: "primary" },
+      { id: "report:dismiss", label: "Dismiss", style: "danger" },
+    ],
+    attachments: [
+      {
+        type: "file",
+        mediaType: "text/csv",
+        filename: "report.csv",
+        source: { type: "data", data: csvBuffer.toString("base64") },
+      },
+    ],
+  },
 });
 ```
 
@@ -158,13 +162,7 @@ Use `Channel<RawEvent>` and keep every platform SDK type inside the adapter pack
 
 ```ts
 import { splitChannelMessage } from "@anvia/channel";
-import type {
-  Channel,
-  ChannelAddress,
-  ChannelEventHandler,
-  ChannelMessage,
-  SentChannelMessage,
-} from "@anvia/channel";
+import type { Channel, ChannelAddress, ChannelEventHandler, ChannelMessage } from "@anvia/channel";
 
 type AcmeEvent = Readonly<{ id: string; body: unknown }>;
 
@@ -173,7 +171,7 @@ export class AcmeChannel implements Channel<AcmeEvent> {
   readonly capabilities = { actions: false } as const;
 
   splitMessage(message: ChannelMessage): readonly ChannelMessage[] {
-    return splitChannelMessage(message, 2_000);
+    return splitChannelMessage({ message, maximumLength: 2_000 });
   }
 
   async start(handler: ChannelEventHandler<AcmeEvent>): Promise<void> {

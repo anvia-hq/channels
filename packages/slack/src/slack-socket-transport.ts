@@ -427,7 +427,7 @@ export function slackMessageBody(
   return {
     text: message.text,
     blocks: [
-      ...splitChannelText(message.text, 3_000).map((text) => ({
+      ...splitChannelText({ text: message.text, maximumLength: 3_000 }).map((text) => ({
         type: "section",
         text: { type: "mrkdwn", text },
       })),
