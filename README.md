@@ -1,8 +1,19 @@
-# Anvia Channels
+<p align="center">
+  <img src=".github/assets/anvia-wordmark.png" alt="Anvia wordmark" width="320" />
+</p>
 
-Strict TypeScript adapters that connect Discord, Slack, and Telegram to Anvia agents or ordinary
-application code. The workspace also supports proactive delivery from workers, monitors, and
-scheduled jobs without starting an agent.
+<p align="center">
+  <strong>Connect Discord, Slack, and Telegram to Anvia agents in strict TypeScript.</strong>
+</p>
+
+<p align="center">
+  <img src="https://img.shields.io/badge/license-MIT-89c83f?style=flat-square" alt="MIT license" />
+  <img src="https://img.shields.io/badge/TypeScript-5.9-3178c6?style=flat-square&logo=typescript&logoColor=white" alt="TypeScript 5.9" />
+  <img src="https://img.shields.io/badge/runtime-Node.js%2024-3c873a?style=flat-square&logo=node.js&logoColor=white" alt="Node.js runtime" />
+</p>
+
+Platform-neutral channel adapters for Anvia agents or ordinary application code. The workspace also
+supports proactive delivery from workers, monitors, and scheduled jobs without starting an agent.
 
 > The five libraries are currently private workspace packages while live-platform verification is
 > completed. They are not published to npm yet.
@@ -140,3 +151,7 @@ pnpm verify:release
 Packages remain private until the credential-backed scenarios in
 [live verification](./docs/live-verification.md) pass. The offline test suite does not require live
 platform credentials or network access.
+
+## License
+
+MIT
