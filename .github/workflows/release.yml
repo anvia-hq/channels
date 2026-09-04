@@ -44,11 +44,11 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm verify:release
       - name: Inspect package tarballs
-        run: pnpm -r --if-present pack --dry-run
+        run: pnpm -r pack --dry-run
       # Authenticates through the GitHub Actions OIDC token (trusted
       # publishing) — no NPM_TOKEN secret. Private packages are skipped;
       # remove `private` only for packages meant for npm.
-      - run: pnpm -r --if-present publish --provenance --no-git-checks
+      - run: pnpm -r publish --provenance --no-git-checks
       # All packages release together; the tag comes from @anvia/channel's
       # version. Tags and the GitHub release only exist after a successful
       # publish.
