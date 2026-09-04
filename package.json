@@ -21,7 +21,8 @@
     "lint:fix": "oxlint --fix .",
     "test": "pnpm -r --if-present test",
     "typecheck": "pnpm -r --if-present typecheck",
-    "verify:release": "pnpm check && pnpm typecheck && pnpm build && pnpm test"
+    "verify:release": "pnpm check && pnpm typecheck && pnpm build && pnpm test",
+    "version-packages": "changeset version"
   },
   "devDependencies": {
     "@changesets/cli": "^3.0.1",
