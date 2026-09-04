@@ -16,7 +16,9 @@ describe("channelMessagePrompt", () => {
     });
     const event = attachmentEvent(4);
 
-    const prompt = await channelMessagePrompt(channelWith(loadAttachment), event, {
+    const prompt = await channelMessagePrompt({
+      channel: channelWith(loadAttachment),
+      event,
       attachmentConcurrency: 2,
     });
 
@@ -43,43 +45,50 @@ describe("channelMessagePrompt", () => {
     const channel = channelWith(loadAttachment);
 
     await expect(
-      channelMessagePrompt(channel, attachmentEvent(3), { maximumAttachments: 2 }),
+      channelMessagePrompt({
+        channel,
+        event: attachmentEvent(3),
+        maximumAttachments: 2,
+      }),
     ).rejects.toThrow("more than 2 attachments");
     await expect(
-      channelMessagePrompt(
+      channelMessagePrompt({
         channel,
-        messageEvent({
+        event: messageEvent({
           attachments: [
             { id: "1", type: "file", mediaType: "text/plain", size: 2 },
             { id: "2", type: "file", mediaType: "text/plain", size: 2 },
           ],
         }),
-        { maximumTotalAttachmentBytes: 3 },
-      ),
+        maximumTotalAttachmentBytes: 3,
+      }),
     ).rejects.toThrow("3 bytes in total");
     expect(loadAttachment).not.toHaveBeenCalled();
   });
 
   it("enforces actual data size and requires URL-backed attachment sizes", async () => {
     await expect(
-      channelMessagePrompt(
-        channelWith(async () => ({ type: "data", data: "AQID" })),
-        attachmentEvent(1),
-        { maximumAttachmentBytes: 2 },
-      ),
+      channelMessagePrompt({
+        channel: channelWith(async () => ({ type: "data", data: "AQID" })),
+        event: attachmentEvent(1),
+        maximumAttachmentBytes: 2,
+      }),
     ).rejects.toThrow("must not exceed 2 bytes");
     await expect(
-      channelMessagePrompt(
-        channelWith(async () => ({ type: "url", url: "https://cdn.example.test/file" })),
-        attachmentEvent(1),
-      ),
+      channelMessagePrompt({
+        channel: channelWith(async () => ({
+          type: "url",
+          url: "https://cdn.example.test/file",
+        })),
+        event: attachmentEvent(1),
+      }),
     ).rejects.toThrow("must include their byte size");
   });
 
   it("reports when a text-only channel receives attachments", async () => {
-    await expect(channelMessagePrompt(channelWith(), attachmentEvent(1))).rejects.toThrow(
-      "does not support attachment loading",
-    );
+    await expect(
+      channelMessagePrompt({ channel: channelWith(), event: attachmentEvent(1) }),
+    ).rejects.toThrow("does not support attachment loading");
   });
 });
 

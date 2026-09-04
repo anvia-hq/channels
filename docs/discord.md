@@ -62,17 +62,17 @@ The REST delivery path does not require the Gateway to be started:
 ```ts
 import { sendChannelMessage } from "@anvia/channel";
 
-await sendChannelMessage(
+await sendChannelMessage({
   channel,
-  {
+  address: {
     platform: "discord",
     conversationId: process.env.DISCORD_CHANNEL_ID!,
   },
-  {
+  message: {
     text: "Deployment finished.",
     actions: [{ id: "deploy:details", label: "Details", style: "primary" }],
   },
-);
+});
 ```
 
 Generated text is sent with Discord mentions disabled, preventing unexpected `@everyone`, role, or

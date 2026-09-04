@@ -53,7 +53,7 @@ export class SqliteChannelAgentInteractionStore implements ChannelAgentInteracti
     if (row === undefined) return undefined;
     const pending = parsePending(row.pending_json);
     if (interactionExpired(pending)) {
-      this.delete(key, pending.interaction.id);
+      this.delete({ key, interactionId: pending.interaction.id });
       return undefined;
     }
     return pending;
@@ -73,7 +73,10 @@ export class SqliteChannelAgentInteractionStore implements ChannelAgentInteracti
       .run(key, pending.interaction.id, serialized);
   }
 
-  take(key: string, interactionId: string): PendingChannelAgentInteraction | undefined {
+  take({
+    key,
+    interactionId,
+  }: Readonly<{ key: string; interactionId: string }>): PendingChannelAgentInteraction | undefined {
     validateKey(key);
     validateKey(interactionId, "Channel interaction ID");
     const row = this.database
@@ -87,7 +90,7 @@ export class SqliteChannelAgentInteractionStore implements ChannelAgentInteracti
     const pending = parsePending(row.pending_json);
     return interactionExpired(pending) ? undefined : pending;
   }
-  delete(key: string, interactionId: string): void {
+  delete({ key, interactionId }: Readonly<{ key: string; interactionId: string }>): void {
     validateKey(key);
     validateKey(interactionId, "Channel interaction ID");
     this.database

@@ -117,9 +117,11 @@ import { channelMessagePrompt, createChannelAgent } from "@anvia/channel-agent";
 const service = createChannelAgent({
   channel,
   agent,
-  async createPrompt(event, context) {
-    return channelMessagePrompt(context.channel, event, {
-      signal: context.abortSignal,
+  async createPrompt(request) {
+    return channelMessagePrompt({
+      channel: request.context.channel,
+      event: request.event,
+      signal: request.context.abortSignal,
       maximumAttachments: 3,
     });
   },
@@ -165,7 +167,7 @@ const service = createChannelAgent({
 const service = createChannelAgent({
   channel,
   agent,
-  renderOutcome(outcome) {
+  renderOutcome({ outcome }) {
     if (outcome.type !== "response") return outcome.text;
 
     return {

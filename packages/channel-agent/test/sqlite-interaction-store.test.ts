@@ -28,8 +28,10 @@ describe("SqliteChannelAgentInteractionStore", () => {
     store.set("conversation", pending);
 
     expect(store.get("conversation")).toEqual(pending);
-    expect(store.take("conversation", "wrong-interaction")).toBeUndefined();
-    expect(store.take("conversation", outcome.interaction.id)).toEqual(pending);
+    expect(store.take({ key: "conversation", interactionId: "wrong-interaction" })).toBeUndefined();
+    expect(store.take({ key: "conversation", interactionId: outcome.interaction.id })).toEqual(
+      pending,
+    );
     expect(store.get("conversation")).toBeUndefined();
     store.close();
   });
@@ -47,7 +49,9 @@ describe("SqliteChannelAgentInteractionStore", () => {
     store.set("conversation", expired);
     expect(store.get("conversation")).toBeUndefined();
     expect(store.get("conversation")).toBeUndefined();
-    expect(store.take("conversation", outcome.interaction.id)).toBeUndefined();
+    expect(
+      store.take({ key: "conversation", interactionId: outcome.interaction.id }),
+    ).toBeUndefined();
 
     const live = {
       continuation: outcome.continuation,
@@ -56,7 +60,9 @@ describe("SqliteChannelAgentInteractionStore", () => {
     };
     store.set("conversation", live);
     expect(store.get("conversation")).toEqual(live);
-    expect(store.take("conversation", outcome.interaction.id)).toEqual(live);
+    expect(store.take({ key: "conversation", interactionId: outcome.interaction.id })).toEqual(
+      live,
+    );
     store.close();
   });
 

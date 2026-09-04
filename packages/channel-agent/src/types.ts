@@ -66,16 +66,22 @@ export type ChannelAgentErrorContext<RawEvent = unknown> = Readonly<{
 export type ChannelAgentInteractionOptions<RawEvent = unknown> = Readonly<{
   store?: ChannelAgentInteractionStore;
   render?: (
-    pending: PendingChannelAgentInteraction,
-    event: ChannelEvent<RawEvent>,
+    request: Readonly<{
+      pending: PendingChannelAgentInteraction;
+      event: ChannelEvent<RawEvent>;
+    }>,
   ) => string | ChannelMessage | Promise<string | ChannelMessage>;
   parseResponse?: (
-    event: ChannelMessageEvent<RawEvent>,
-    pending: PendingChannelAgentInteraction,
+    request: Readonly<{
+      event: ChannelMessageEvent<RawEvent>;
+      pending: PendingChannelAgentInteraction;
+    }>,
   ) => AgentInteractionResponse | undefined | Promise<AgentInteractionResponse | undefined>;
   parseAction?: (
-    event: ChannelActionEvent<RawEvent>,
-    pending: PendingChannelAgentInteraction,
+    request: Readonly<{
+      event: ChannelActionEvent<RawEvent>;
+      pending: PendingChannelAgentInteraction;
+    }>,
   ) => AgentInteractionResponse | undefined | Promise<AgentInteractionResponse | undefined>;
   invalidResponseMessage?: string;
   expiredInteractionMessage?: string;
@@ -92,15 +98,19 @@ export type ChannelAgentOptions<RawEvent = unknown, Output = string> = Readonly<
   agent: ChannelAgentExecutor<Output>;
   shouldHandle?: (event: ChannelMessageEvent<RawEvent>) => boolean | Promise<boolean>;
   createPrompt?: (
-    event: ChannelMessageEvent<RawEvent>,
-    context: ChannelAgentPromptContext<RawEvent>,
+    request: Readonly<{
+      event: ChannelMessageEvent<RawEvent>;
+      context: ChannelAgentPromptContext<RawEvent>;
+    }>,
   ) => AgentPrompt | Promise<AgentPrompt>;
   createSession?: (
     event: ChannelMessageEvent<RawEvent>,
   ) => MemoryScope | undefined | Promise<MemoryScope | undefined>;
   renderOutcome?: (
-    outcome: AgentOutcome<Output>,
-    event: ChannelEvent<RawEvent>,
+    request: Readonly<{
+      outcome: AgentOutcome<Output>;
+      event: ChannelEvent<RawEvent>;
+    }>,
   ) => string | ChannelMessage | Promise<string | ChannelMessage>;
   streaming?: ChannelAgentStreamingOptions;
   multimodal?: false | ChannelAgentMultimodalOptions;

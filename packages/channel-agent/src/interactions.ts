@@ -28,13 +28,12 @@ export interface ChannelAgentInteractionStore {
     | Promise<PendingChannelAgentInteraction | undefined>;
   set(key: string, pending: PendingChannelAgentInteraction): void | Promise<void>;
   take(
-    key: string,
-    interactionId: string,
+    request: Readonly<{ key: string; interactionId: string }>,
   ):
     | PendingChannelAgentInteraction
     | undefined
     | Promise<PendingChannelAgentInteraction | undefined>;
-  delete(key: string, interactionId: string): void | Promise<void>;
+  delete(request: Readonly<{ key: string; interactionId: string }>): void | Promise<void>;
 }
 
 export class MemoryChannelAgentInteractionStore implements ChannelAgentInteractionStore {
@@ -52,14 +51,17 @@ export class MemoryChannelAgentInteractionStore implements ChannelAgentInteracti
   set(key: string, pending: PendingChannelAgentInteraction): void {
     this.pending.set(key, pending);
   }
-  take(key: string, interactionId: string): PendingChannelAgentInteraction | undefined {
+  take({
+    key,
+    interactionId,
+  }: Readonly<{ key: string; interactionId: string }>): PendingChannelAgentInteraction | undefined {
     const pending = this.pending.get(key);
     if (pending === undefined || pending.interaction.id !== interactionId) return undefined;
     this.pending.delete(key);
     if (interactionExpired(pending)) return undefined;
     return pending;
   }
-  delete(key: string, interactionId: string): void {
+  delete({ key, interactionId }: Readonly<{ key: string; interactionId: string }>): void {
     const pending = this.pending.get(key);
     if (pending === undefined || pending.interaction.id !== interactionId) return;
     this.pending.delete(key);
@@ -106,9 +108,12 @@ export function channelInteractionActions(
 }
 
 export function parseChannelAgentActionResponse(
-  event: ChannelActionEvent,
-  pending: PendingChannelAgentInteraction,
+  request: Readonly<{
+    event: ChannelActionEvent;
+    pending: PendingChannelAgentInteraction;
+  }>,
 ): AgentInteractionResponse | undefined {
+  const { event, pending } = request;
   const token = pending.actionToken;
   if (token === undefined) return undefined;
   if (pending.interaction.type === "tool-approval") {
@@ -138,8 +143,12 @@ function actionId(token: string, value: string): string {
   return `anvia:${token}:${value}`;
 }
 
-export function renderChannelAgentInteraction(pending: PendingChannelAgentInteraction): string {
-  const interaction = pending.interaction;
+export function renderChannelAgentInteraction(
+  request: Readonly<{
+    pending: PendingChannelAgentInteraction;
+  }>,
+): string {
+  const interaction = request.pending.interaction;
   if (interaction.type === "tool-approval") {
     const reason = interaction.reason === undefined ? "" : `\n${interaction.reason}`;
     const input = renderApprovalInput(interaction.input);
@@ -201,9 +210,12 @@ function isSensitiveInputKey(key: string): boolean {
 }
 
 export function parseChannelAgentInteractionResponse(
-  event: ChannelMessageEvent,
-  pending: PendingChannelAgentInteraction,
+  request: Readonly<{
+    event: ChannelMessageEvent;
+    pending: PendingChannelAgentInteraction;
+  }>,
 ): AgentInteractionResponse | undefined {
+  const { event, pending } = request;
   const interaction = pending.interaction;
   if (interaction.type === "tool-approval") {
     return parseApproval(event.text);
