@@ -55,6 +55,7 @@ export class DiscordChannel implements Channel<DiscordGatewayEvent> {
     replies: true,
     typing: true,
     reactions: true,
+    reactionRemovals: true,
     delete: true,
     messageEdits: true,
   } as const;
@@ -182,6 +183,18 @@ export class DiscordChannel implements Channel<DiscordGatewayEvent> {
       throw new TypeError("Discord reaction must not be empty");
     }
     await this.gateway.react(
+      sent.address.threadId ?? sent.address.conversationId,
+      sent.id,
+      reaction,
+    );
+  }
+
+  async unreact(sent: SentChannelMessage, reaction: string): Promise<void> {
+    validateSentMessage(sent);
+    if (typeof reaction !== "string" || reaction.length === 0) {
+      throw new TypeError("Discord reaction must not be empty");
+    }
+    await this.gateway.unreact(
       sent.address.threadId ?? sent.address.conversationId,
       sent.id,
       reaction,

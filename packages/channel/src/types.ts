@@ -65,6 +65,8 @@ export type ChannelCapabilities = Readonly<{
   replies?: boolean;
   typing?: boolean;
   reactions?: boolean;
+  /** Whether the bot's own reactions can be removed via `unreact`. */
+  reactionRemovals?: boolean;
   delete?: boolean;
   messageEdits?: boolean;
 }>;
@@ -187,4 +189,6 @@ export interface Channel<RawEvent = unknown> {
   delete?(sent: SentChannelMessage): Promise<void>;
   showTyping?(address: ChannelAddress): Promise<void>;
   react?(sent: SentChannelMessage, reaction: string): Promise<void>;
+  /** Removes a reaction previously added by this bot; gate on `capabilities.reactionRemovals`. */
+  unreact?(sent: SentChannelMessage, reaction: string): Promise<void>;
 }

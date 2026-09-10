@@ -130,5 +130,6 @@ export interface SlackTransport {
   edit(channelId: string, timestamp: string, message: ChannelMessage): Promise<void>;
   delete(channelId: string, timestamp: string): Promise<void>;
   react(channelId: string, timestamp: string, reaction: string): Promise<void>;
+  removeReaction(channelId: string, timestamp: string, reaction: string): Promise<void>;
   loadAttachment(file: SlackFile, signal?: AbortSignal): Promise<ChannelAttachmentData>;
 }

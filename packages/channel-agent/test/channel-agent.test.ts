@@ -1055,3 +1055,54 @@ describe("ChannelAgentService commands", () => {
     await service.stop();
   });
 });
+
+describe("ChannelAgentService acknowledgement completion", () => {
+  it("clears the acceptance reaction and adds the completion reaction", async () => {
+    const channel = new FakeChannel(Number.MAX_SAFE_INTEGER, true, true, true);
+    const service = await serveChannelAgent({
+      channel,
+      agent: fakeAgent({ streaming: false }),
+      acknowledge: { reaction: "👀", completeReaction: "✅" },
+    });
+
+    await channel.emit(messageEvent());
+
+    expect(channel.unreacted.map((item) => item.reaction)).toEqual(["👀"]);
+    expect(channel.reacted.map((item) => item.reaction)).toEqual(["👀", "✅"]);
+    await service.stop();
+  });
+
+  it("keeps the acceptance reaction when clearing is disabled", async () => {
+    const channel = new FakeChannel(Number.MAX_SAFE_INTEGER, true, true, true);
+    const service = await serveChannelAgent({
+      channel,
+      agent: fakeAgent({ streaming: false }),
+      acknowledge: {
+        reaction: "👀",
+        completeReaction: "✅",
+        clearOnCompletion: false,
+      },
+    });
+
+    await channel.emit(messageEvent());
+
+    expect(channel.unreacted).toEqual([]);
+    expect(channel.reacted.map((item) => item.reaction)).toEqual(["👀", "✅"]);
+    await service.stop();
+  });
+
+  it("skips clearing when the channel cannot remove reactions", async () => {
+    const channel = new FakeChannel(Number.MAX_SAFE_INTEGER, true, true, false);
+    const service = await serveChannelAgent({
+      channel,
+      agent: fakeAgent({ streaming: false }),
+      acknowledge: { reaction: "👀", completeReaction: "✅" },
+    });
+
+    await channel.emit(messageEvent());
+
+    expect(channel.unreacted).toEqual([]);
+    expect(channel.reacted.map((item) => item.reaction)).toEqual(["👀", "✅"]);
+    await service.stop();
+  });
+});

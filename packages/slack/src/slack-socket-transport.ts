@@ -34,6 +34,7 @@ export type SlackWebClient = Readonly<{
   updateMessage(channelId: string, timestamp: string, message: ChannelMessage): Promise<unknown>;
   deleteMessage(channelId: string, timestamp: string): Promise<unknown>;
   addReaction(channelId: string, timestamp: string, reaction: string): Promise<unknown>;
+  removeReaction(channelId: string, timestamp: string, reaction: string): Promise<unknown>;
   uploadFile(
     channelId: string,
     threadTimestamp: string | undefined,
@@ -179,6 +180,10 @@ export class SlackSocketTransport implements SlackTransport {
     await this.web.addReaction(channelId, timestamp, reaction.replace(/^:|:$/g, ""));
   }
 
+  async removeReaction(channelId: string, timestamp: string, reaction: string): Promise<void> {
+    await this.web.removeReaction(channelId, timestamp, reaction.replace(/^:|:$/g, ""));
+  }
+
   async loadAttachment(
     file: Parameters<SlackTransport["loadAttachment"]>[0],
     signal?: AbortSignal,
@@ -291,6 +296,8 @@ function slackWebClient(
       client.chat.delete({ channel: channelId, ts: timestamp }),
     addReaction: (channelId, timestamp, reaction) =>
       client.reactions.add({ channel: channelId, timestamp, name: reaction }),
+    removeReaction: (channelId, timestamp, reaction) =>
+      client.reactions.remove({ channel: channelId, timestamp, name: reaction }),
     uploadFile: async (channelId, threadTimestamp, attachment, maximumBytes) => {
       const file = await outboundAttachmentBytes(attachment, fetchImplementation, maximumBytes);
       const common = { file, filename: attachment.filename ?? "attachment" };

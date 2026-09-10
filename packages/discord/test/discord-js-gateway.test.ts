@@ -111,9 +111,13 @@ describe("DiscordJsGateway REST delivery", () => {
 
     await gateway.showTyping("20");
     await gateway.react("20", "77", "👍");
+    await gateway.unreact("20", "77", "👍");
     await gateway.delete("20", "77");
     expect(post).toHaveBeenCalledWith("/channels/20/typing", {});
     expect(put).toHaveBeenCalledWith("/channels/20/messages/77/reactions/%F0%9F%91%8D/@me");
+    expect(deleteRequest).toHaveBeenCalledWith(
+      "/channels/20/messages/77/reactions/%F0%9F%91%8D/@me",
+    );
     expect(deleteRequest).toHaveBeenCalledWith("/channels/20/messages/77");
   });
 

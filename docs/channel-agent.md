@@ -99,7 +99,9 @@ Behaviour and limits:
   standard adapters (Discord, Slack, Telegram) support them; the service silently skips
   adapters that do not.
 - The completion reaction is added only after a final response is delivered — not while an
-  approval or question interaction is still pending.
+  approval or question interaction is still pending. When a completion reaction is configured,
+  the acceptance reaction is removed at the same time whenever the channel supports reaction
+  removals (`capabilities.reactionRemovals`); set `clearOnCompletion: false` to keep it.
 - A failed reaction is reported through `onError` with the `acknowledge` stage and never
   interrupts the agent run or the reply.
 - Pass `acknowledge: false` (or omit it) to disable acknowledgements.

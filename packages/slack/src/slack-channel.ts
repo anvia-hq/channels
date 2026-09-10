@@ -54,6 +54,7 @@ export class SlackChannel implements Channel<SlackSocketEvent> {
     outboundAttachments: ["image", "audio", "video", "file"],
     replies: true,
     reactions: true,
+    reactionRemovals: true,
     delete: true,
     messageEdits: true,
   } as const;
@@ -180,6 +181,14 @@ export class SlackChannel implements Channel<SlackSocketEvent> {
       throw new TypeError("Slack reaction must not be empty");
     }
     await this.transport.react(sent.address.conversationId, sent.id, reaction);
+  }
+
+  async unreact(sent: SentChannelMessage, reaction: string): Promise<void> {
+    validateSentMessage(sent);
+    if (typeof reaction !== "string" || reaction.length === 0) {
+      throw new TypeError("Slack reaction must not be empty");
+    }
+    await this.transport.removeReaction(sent.address.conversationId, sent.id, reaction);
   }
 
   private async reportError(error: unknown, context: SlackChannelErrorContext): Promise<void> {

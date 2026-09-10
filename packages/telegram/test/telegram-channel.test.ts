@@ -423,12 +423,18 @@ describe("TelegramChannel", () => {
     );
     await channel.showTyping({ platform: "telegram", conversationId: "-100" });
     await channel.react(sent, "👍");
+    await channel.unreact(sent, "👍");
     await channel.delete(sent);
     expect(fake.sendChatAction).toHaveBeenCalledWith({ chat_id: -100, action: "typing" });
     expect(fake.setMessageReaction).toHaveBeenCalledWith({
       chat_id: -100,
       message_id: 77,
       reaction: [{ type: "emoji", emoji: "👍" }],
+    });
+    expect(fake.setMessageReaction).toHaveBeenCalledWith({
+      chat_id: -100,
+      message_id: 77,
+      reaction: [],
     });
     expect(fake.deleteMessage).toHaveBeenCalledWith({ chat_id: -100, message_id: 77 });
   });

@@ -305,6 +305,10 @@ export class DiscordJsGateway implements DiscordGateway {
     await this.rest.put(Routes.channelMessageOwnReaction(channelId, messageId, reaction));
   }
 
+  async unreact(channelId: string, messageId: string, reaction: string): Promise<void> {
+    await this.rest.delete(Routes.channelMessageOwnReaction(channelId, messageId, reaction));
+  }
+
   private detachClient(
     client: Client,
     messageListener: (message: Message) => void,

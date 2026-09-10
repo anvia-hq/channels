@@ -148,6 +148,10 @@ if (channel.capabilities?.reactions === true && channel.react !== undefined) {
   await channel.react(sentMessage, "👍");
 }
 
+if (channel.capabilities?.reactionRemovals === true && channel.unreact !== undefined) {
+  await channel.unreact(sentMessage, "👍");
+}
+
 if (channel.capabilities?.delete === true && channel.delete !== undefined) {
   await channel.delete(sentMessage);
 }

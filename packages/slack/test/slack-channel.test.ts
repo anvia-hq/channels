@@ -134,8 +134,10 @@ describe("SlackChannel", () => {
     expect(fake.edit).toHaveBeenCalledWith("C1", "1700000001.000002", { text: "resolved" });
 
     await channel.react(sent, "thumbsup");
+    await channel.unreact(sent, "thumbsup");
     await channel.delete(sent);
     expect(fake.react).toHaveBeenCalledWith("C1", "1700000001.000002", "thumbsup");
+    expect(fake.removeReaction).toHaveBeenCalledWith("C1", "1700000001.000002", "thumbsup");
     expect(fake.delete).toHaveBeenCalledWith("C1", "1700000001.000002");
   });
 

@@ -20,11 +20,13 @@ export class FakeChannel implements Channel {
     readonly actions: boolean;
     readonly delete: true;
     readonly reactions: boolean;
+    readonly reactionRemovals: boolean;
   };
   readonly sent: Array<{ address: ChannelAddress; message: ChannelMessage }> = [];
   readonly edits: Array<{ sent: SentChannelMessage; message: ChannelMessage }> = [];
   readonly deleted: SentChannelMessage[] = [];
   readonly reacted: Array<{ sent: SentChannelMessage; reaction: string }> = [];
+  readonly unreacted: Array<{ sent: SentChannelMessage; reaction: string }> = [];
   startCount = 0;
   stopCount = 0;
   splitCount = 0;
@@ -37,8 +39,9 @@ export class FakeChannel implements Channel {
     private readonly maximumMessageLength = Number.MAX_SAFE_INTEGER,
     actions = true,
     reactions = false,
+    reactionRemovals = false,
   ) {
-    this.capabilities = { actions, delete: true, reactions };
+    this.capabilities = { actions, delete: true, reactions, reactionRemovals };
   }
 
   splitMessage(message: ChannelMessage): readonly ChannelMessage[] {
@@ -82,6 +85,10 @@ export class FakeChannel implements Channel {
   async react(sent: SentChannelMessage, reaction: string): Promise<void> {
     if (this.reactError !== undefined) throw this.reactError;
     this.reacted.push({ sent, reaction });
+  }
+
+  async unreact(sent: SentChannelMessage, reaction: string): Promise<void> {
+    this.unreacted.push({ sent, reaction });
   }
 
   async emit(event: ChannelEvent): Promise<void> {

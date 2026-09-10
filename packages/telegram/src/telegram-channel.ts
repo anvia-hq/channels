@@ -87,6 +87,7 @@ export class TelegramChannel implements Channel<TelegramUpdate> {
     replies: true,
     typing: true,
     reactions: true,
+    reactionRemovals: true,
     delete: true,
     messageEdits: true,
   } as const;
@@ -337,6 +338,19 @@ export class TelegramChannel implements Channel<TelegramUpdate> {
       chat_id: chatId(sent.address.conversationId),
       message_id: positiveInteger(sent.id, "Telegram message ID"),
       reaction: [{ type: "emoji", emoji: reaction }],
+    });
+  }
+
+  async unreact(sent: SentChannelMessage, reaction: string): Promise<void> {
+    validateSentMessage(sent);
+    if (typeof reaction !== "string" || reaction.length === 0) {
+      throw new TypeError("Telegram reaction must not be empty");
+    }
+    // An empty reaction list removes the reactions added by this bot.
+    await this.api.setMessageReaction({
+      chat_id: chatId(sent.address.conversationId),
+      message_id: positiveInteger(sent.id, "Telegram message ID"),
+      reaction: [],
     });
   }
 
