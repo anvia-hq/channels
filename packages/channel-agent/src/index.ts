@@ -17,6 +17,7 @@ export {
 export { channelMessagePrompt } from "./prompts.js";
 export { SqliteChannelAgentInteractionStore } from "./sqlite-interaction-store.js";
 export type {
+  ChannelAgentAcknowledgementOptions,
   ChannelAgentErrorContext,
   ChannelAgentExecutor,
   ChannelAgentInteractionOptions,
