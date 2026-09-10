@@ -29,10 +29,12 @@ import type { PendingChannelAgentInteraction } from "./interactions.js";
 import { channelMessagePrompt, resolveMultimodalOptions } from "./prompts.js";
 import type {
   ChannelAgentAcknowledgementOptions,
+  ChannelAgentCommandHandler,
   ChannelAgentCommandOptions,
   ChannelAgentErrorContext,
   ChannelAgentInteractionOptions,
   ChannelAgentOptions,
+  ChannelAgentPromptContext,
   ChannelAgentRunInput,
 } from "./types.js";
 
@@ -66,6 +68,9 @@ type ResolvedOptions<RawEvent, Output> = Readonly<{
     | false
     | Readonly<{
         shouldHandle: NonNullable<ChannelAgentCommandOptions<RawEvent>["shouldHandle"]>;
+        commands: Readonly<
+          Record<string, ChannelAgentCommandHandler<RawEvent, Output> | undefined>
+        >;
       }>;
   interactions:
     | false
@@ -142,16 +147,37 @@ export class ChannelAgentService<RawEvent = unknown, Output = string> {
       if (event.sender.bot) return;
       const commands = this.options.commands;
       if (commands === false) return;
+      const handler = commands.commands[event.name];
+      const commandEvent = event;
       let shouldHandle: boolean;
       try {
         shouldHandle = await commands.shouldHandle(event);
+        if (shouldHandle && handler?.shouldHandle !== undefined) {
+          shouldHandle = await handler.shouldHandle(event);
+        }
       } catch (error) {
         await this.reportError(error, { stage: "filter", event });
         return;
       }
       if (!shouldHandle || signal.aborted) return;
+      let overrides: CommandOverrides<RawEvent, Output> | undefined;
+      if (handler !== undefined) {
+        overrides = {};
+        if (handler.createPrompt !== undefined) {
+          const createPrompt = handler.createPrompt;
+          overrides.createPrompt = (request) => createPrompt({ ...request, event: commandEvent });
+        }
+        if (handler.createSession !== undefined) {
+          const createSession = handler.createSession;
+          overrides.createSession = () => createSession(commandEvent);
+        }
+        if (handler.renderOutcome !== undefined) {
+          const renderOutcome = handler.renderOutcome;
+          overrides.renderOutcome = (request) => renderOutcome({ ...request, event: commandEvent });
+        }
+      }
       await this.queue.run(channelConversationKey(event), () =>
-        this.process(commandAsMessage(event), signal),
+        this.process(commandAsMessage(event), signal, overrides),
       );
       return;
     }
@@ -200,7 +226,11 @@ export class ChannelAgentService<RawEvent = unknown, Output = string> {
     await this.resumeInteraction(event, pending, response, signal);
   }
 
-  private async process(event: ChannelMessageEvent<RawEvent>, signal: AbortSignal): Promise<void> {
+  private async process(
+    event: ChannelMessageEvent<RawEvent>,
+    signal: AbortSignal,
+    overrides?: CommandOverrides<RawEvent, Output>,
+  ): Promise<void> {
     if (signal.aborted) return;
 
     await this.acknowledgeEvent(event, signal);
@@ -223,11 +253,11 @@ export class ChannelAgentService<RawEvent = unknown, Output = string> {
     let session: MemoryScope | undefined;
     try {
       [prompt, session] = await Promise.all([
-        this.options.createPrompt({
+        (overrides?.createPrompt ?? this.options.createPrompt)({
           event,
           context: { channel: this.options.channel, abortSignal: signal },
         }),
-        this.options.createSession(event),
+        (overrides?.createSession ?? this.options.createSession)(event),
       ]);
     } catch (error) {
       await this.handleFailure(error, "prepare", event, undefined, signal);
@@ -265,7 +295,7 @@ export class ChannelAgentService<RawEvent = unknown, Output = string> {
       await this.cleanupPlaceholder(provisional);
       return;
     }
-    await this.completeOutcome(outcome, event, provisional, signal, deliveredText);
+    await this.completeOutcome(outcome, event, provisional, signal, deliveredText, overrides);
   }
 
   private async streamOutcome(
@@ -347,6 +377,7 @@ export class ChannelAgentService<RawEvent = unknown, Output = string> {
     provisional: SentChannelMessage | undefined,
     signal: AbortSignal,
     deliveredText?: string,
+    overrides?: CommandOverrides<RawEvent, Output>,
   ): Promise<void> {
     let response: ChannelMessage;
     let pending: PendingChannelAgentInteraction | undefined;
@@ -378,7 +409,7 @@ export class ChannelAgentService<RawEvent = unknown, Output = string> {
             : { ...rendered, actions };
       } else {
         response = responseMessage(
-          await this.options.renderOutcome({ outcome, event }),
+          await (overrides?.renderOutcome ?? this.options.renderOutcome)({ outcome, event }),
           this.options.emptyResponseMessage,
         );
       }
@@ -719,6 +750,7 @@ function resolveOptions<RawEvent, Output>(
       : {
           shouldHandle:
             (options.commands === true ? undefined : options.commands.shouldHandle) ?? (() => true),
+          commands: options.commands === true ? {} : (options.commands.commands ?? {}),
         };
 
   return {
@@ -754,6 +786,18 @@ function resolveOptions<RawEvent, Output>(
     onError: options.onError,
   };
 }
+
+/** Per-call pipeline overrides sourced from a matched per-command handler. */
+type CommandOverrides<RawEvent, Output> = {
+  createPrompt?: (
+    request: Readonly<{
+      event: ChannelMessageEvent<RawEvent>;
+      context: ChannelAgentPromptContext<RawEvent>;
+    }>,
+  ) => AgentPrompt | Promise<AgentPrompt>;
+  createSession?: NonNullable<ChannelAgentOptions<RawEvent, Output>["createSession"]>;
+  renderOutcome?: NonNullable<ChannelAgentOptions<RawEvent, Output>["renderOutcome"]>;
+};
 
 /** Converts a command event into the message event shape the run pipeline understands. */
 function commandAsMessage<RawEvent>(

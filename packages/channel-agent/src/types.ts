@@ -59,9 +59,38 @@ export type ChannelAgentMultimodalOptions = Readonly<{
  * command runs the agent with the prompt `/<name> <text>`; bot-authored commands
  * are always ignored.
  */
-export type ChannelAgentCommandOptions<RawEvent = unknown> = Readonly<{
+/**
+ * Per-command overrides for a named slash command. Every field is optional;
+ * anything omitted falls back to the shared channel-agent behaviour.
+ */
+export type ChannelAgentCommandHandler<RawEvent = unknown, Output = string> = Readonly<{
+  /** Extra routing filter for this command name, in addition to the shared filter. */
+  shouldHandle?: (event: ChannelCommandEvent<RawEvent>) => boolean | Promise<boolean>;
+  /** Prompt override; by default accepted commands prompt with `/<name> <text>`. */
+  createPrompt?: (
+    request: Readonly<{
+      event: ChannelCommandEvent<RawEvent>;
+      context: ChannelAgentPromptContext<RawEvent>;
+    }>,
+  ) => AgentPrompt | Promise<AgentPrompt>;
+  /** Session override; returning `undefined` runs the command without memory. */
+  createSession?: (
+    event: ChannelCommandEvent<RawEvent>,
+  ) => MemoryScope | undefined | Promise<MemoryScope | undefined>;
+  /** Outcome renderer override for this command's responses. */
+  renderOutcome?: (
+    request: Readonly<{
+      outcome: AgentOutcome<Output>;
+      event: ChannelCommandEvent<RawEvent>;
+    }>,
+  ) => string | ChannelMessage | Promise<string | ChannelMessage>;
+}>;
+
+export type ChannelAgentCommandOptions<RawEvent = unknown, Output = string> = Readonly<{
   /** Decide which commands are handled; by default every user command is handled. */
   shouldHandle?: (event: ChannelCommandEvent<RawEvent>) => boolean | Promise<boolean>;
+  /** Per-command overrides keyed by command name without the leading slash. */
+  commands?: Readonly<Record<string, ChannelAgentCommandHandler<RawEvent, Output>>>;
 }>;
 
 export type ChannelAgentPromptContext<RawEvent = unknown> = Readonly<{
@@ -146,7 +175,7 @@ export type ChannelAgentOptions<RawEvent = unknown, Output = string> = Readonly<
   /** Shorthand for `acknowledge: { reaction }`; `false` or `undefined` disables acknowledgements. */
   acknowledge?: string | false | ChannelAgentAcknowledgementOptions;
   /** Handle platform slash-command events; `false` (default) ignores them. */
-  commands?: boolean | ChannelAgentCommandOptions<RawEvent>;
+  commands?: boolean | ChannelAgentCommandOptions<RawEvent, Output>;
   interactions?: false | ChannelAgentInteractionOptions<RawEvent>;
   errorMessage?: string | false;
   emptyResponseMessage?: string;
