@@ -1,6 +1,6 @@
 {
   "name": "@anvia/discord",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Discord channel adapter for Anvia.",
   "license": "MIT",
   "type": "module",

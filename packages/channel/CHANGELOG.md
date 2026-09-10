@@ -1,5 +1,11 @@
 # @anvia/channel
 
+## 0.4.0
+
+### Minor Changes
+
+- 09cf8a5: Complete the reaction lifecycle with unreact() and automatic acknowledgement cleanup, route Discord command responses through the interaction webhook, add per-command configuration, and add outbound rate limiting: Telegram 429 retries and createRateLimitedChannel().
+
 ## 0.3.0
 
 ### Minor Changes
