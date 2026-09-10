@@ -29,6 +29,7 @@ platform setup through delivery and shutdown.
 | Create a Telegram adapter                            | `telegram()`                                                   | `@anvia/telegram`      |
 | Connect an adapter to an existing Anvia agent        | `createChannelAgent()`                                         | `@anvia/channel-agent` |
 | Create and immediately start that bridge             | `serveChannelAgent()`                                          | `@anvia/channel-agent` |
+| React to incoming messages (for example 👀)          | `createChannelAgent({ acknowledge })`                          | `@anvia/channel-agent` |
 | Preserve incoming attachments in a custom prompt     | `channelMessagePrompt()`                                       | `@anvia/channel-agent` |
 | Choose shared or sender-isolated conversation memory | `channelConversationSession`, `channelConversationUserSession` | `@anvia/channel-agent` |
 | Keep approvals/questions until restart only          | `MemoryChannelAgentInteractionStore`                           | `@anvia/channel-agent` |

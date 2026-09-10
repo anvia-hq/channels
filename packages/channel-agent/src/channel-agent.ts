@@ -27,6 +27,7 @@ import {
 import type { PendingChannelAgentInteraction } from "./interactions.js";
 import { channelMessagePrompt, resolveMultimodalOptions } from "./prompts.js";
 import type {
+  ChannelAgentAcknowledgementOptions,
   ChannelAgentErrorContext,
   ChannelAgentInteractionOptions,
   ChannelAgentOptions,
@@ -58,6 +59,7 @@ type ResolvedOptions<RawEvent, Output> = Readonly<{
   }>;
   errorMessage: string | false;
   emptyResponseMessage: string;
+  acknowledge: ChannelAgentAcknowledgementOptions | false;
   interactions:
     | false
     | Readonly<{
@@ -176,6 +178,8 @@ export class ChannelAgentService<RawEvent = unknown, Output = string> {
 
   private async process(event: ChannelMessageEvent<RawEvent>, signal: AbortSignal): Promise<void> {
     if (signal.aborted) return;
+
+    await this.acknowledgeEvent(event, signal);
 
     let pending: PendingChannelAgentInteraction | undefined;
     if (this.options.interactions !== false) {
@@ -370,6 +374,42 @@ export class ChannelAgentService<RawEvent = unknown, Output = string> {
     } catch (error) {
       if (pending !== undefined) await this.rollbackInteraction(event, pending);
       await this.reportError(error, { stage: "delivery", event });
+      return;
+    }
+    const acknowledge = this.options.acknowledge;
+    if (
+      outcome.type !== "interaction" &&
+      acknowledge !== false &&
+      acknowledge.completeReaction !== undefined &&
+      event.type === "message"
+    ) {
+      await this.reactToEvent(event, acknowledge.completeReaction, signal);
+    }
+  }
+
+  /** Reacts to an accepted incoming message when acknowledgement is configured and supported. */
+  private async acknowledgeEvent(
+    event: ChannelMessageEvent<RawEvent>,
+    signal: AbortSignal,
+  ): Promise<void> {
+    const acknowledge = this.options.acknowledge;
+    if (acknowledge === false || signal.aborted) return;
+    await this.reactToEvent(event, acknowledge.reaction, signal);
+  }
+
+  private async reactToEvent(
+    event: ChannelMessageEvent<RawEvent>,
+    reaction: string,
+    signal: AbortSignal,
+  ): Promise<void> {
+    if (signal.aborted) return;
+    const channel = this.options.channel;
+    if (channel.capabilities?.reactions !== true || channel.react === undefined) return;
+    const sent: SentChannelMessage = { id: event.id, address: eventAddress(event) };
+    try {
+      await channel.react.call(channel, sent, reaction);
+    } catch (error) {
+      await this.reportError(error, { stage: "acknowledge", event });
     }
   }
 
@@ -629,6 +669,7 @@ function resolveOptions<RawEvent, Output>(
   const interactions = resolveInteractionOptions(options.interactions);
   const multimodal =
     options.multimodal === false ? false : resolveMultimodalOptions(options.multimodal);
+  const acknowledge = resolveAcknowledgement(options.acknowledge);
 
   return {
     channel: options.channel,
@@ -657,9 +698,25 @@ function resolveOptions<RawEvent, Output>(
     },
     errorMessage,
     emptyResponseMessage,
+    acknowledge,
     interactions,
     onError: options.onError,
   };
+}
+
+function resolveAcknowledgement(
+  options: string | false | ChannelAgentAcknowledgementOptions | undefined,
+): ChannelAgentAcknowledgementOptions | false {
+  if (options === undefined || options === false) return false;
+  const resolved: ChannelAgentAcknowledgementOptions =
+    typeof options === "string" ? { reaction: options } : options;
+  if (resolved.reaction.length === 0) {
+    throw new TypeError("Channel agent acknowledgement reaction must not be empty");
+  }
+  if (resolved.completeReaction !== undefined && resolved.completeReaction.length === 0) {
+    throw new TypeError("Channel agent acknowledgement complete reaction must not be empty");
+  }
+  return resolved;
 }
 
 function resolveInteractionOptions<RawEvent>(

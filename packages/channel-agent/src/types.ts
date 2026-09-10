@@ -59,8 +59,20 @@ export type ChannelAgentPromptContext<RawEvent = unknown> = Readonly<{
 }>;
 
 export type ChannelAgentErrorContext<RawEvent = unknown> = Readonly<{
-  stage: "filter" | "prepare" | "interaction" | "agent" | "delivery";
+  stage: "filter" | "prepare" | "acknowledge" | "interaction" | "agent" | "delivery";
   event: ChannelEvent<RawEvent>;
+}>;
+
+/**
+ * Reaction cues applied to an incoming message while the agent works on it.
+ * Both reactions require `channel.capabilities.reactions` and `channel.react`;
+ * the completion reaction is added only after a final response is delivered.
+ */
+export type ChannelAgentAcknowledgementOptions = Readonly<{
+  /** Reaction added to the incoming message as soon as the service accepts it. */
+  reaction: string;
+  /** Optional reaction added to the same message once a final response is delivered. */
+  completeReaction?: string;
 }>;
 
 export type ChannelAgentInteractionOptions<RawEvent = unknown> = Readonly<{
@@ -114,6 +126,8 @@ export type ChannelAgentOptions<RawEvent = unknown, Output = string> = Readonly<
   ) => string | ChannelMessage | Promise<string | ChannelMessage>;
   streaming?: ChannelAgentStreamingOptions;
   multimodal?: false | ChannelAgentMultimodalOptions;
+  /** Shorthand for `acknowledge: { reaction }`; `false` or `undefined` disables acknowledgements. */
+  acknowledge?: string | false | ChannelAgentAcknowledgementOptions;
   interactions?: false | ChannelAgentInteractionOptions<RawEvent>;
   errorMessage?: string | false;
   emptyResponseMessage?: string;

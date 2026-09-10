@@ -15,22 +15,29 @@ import type {
 
 export class FakeChannel implements Channel {
   readonly platform = "test";
-  readonly capabilities: { readonly actions: boolean; readonly delete: true };
+  readonly capabilities: {
+    readonly actions: boolean;
+    readonly delete: true;
+    readonly reactions: boolean;
+  };
   readonly sent: Array<{ address: ChannelAddress; message: ChannelMessage }> = [];
   readonly edits: Array<{ sent: SentChannelMessage; message: ChannelMessage }> = [];
   readonly deleted: SentChannelMessage[] = [];
+  readonly reacted: Array<{ sent: SentChannelMessage; reaction: string }> = [];
   startCount = 0;
   stopCount = 0;
   splitCount = 0;
   stopError: unknown = undefined;
+  reactError: unknown = undefined;
   private handler: ChannelEventHandler | undefined;
   readonly attachmentData = new Map<string, ChannelAttachmentData>();
 
   constructor(
     private readonly maximumMessageLength = Number.MAX_SAFE_INTEGER,
     actions = true,
+    reactions = false,
   ) {
-    this.capabilities = { actions, delete: true };
+    this.capabilities = { actions, delete: true, reactions };
   }
 
   splitMessage(message: ChannelMessage): readonly ChannelMessage[] {
@@ -69,6 +76,11 @@ export class FakeChannel implements Channel {
 
   async delete(sent: SentChannelMessage): Promise<void> {
     this.deleted.push(sent);
+  }
+
+  async react(sent: SentChannelMessage, reaction: string): Promise<void> {
+    if (this.reactError !== undefined) throw this.reactError;
+    this.reacted.push({ sent, reaction });
   }
 
   async emit(event: ChannelEvent): Promise<void> {

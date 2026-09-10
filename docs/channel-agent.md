@@ -68,6 +68,42 @@ const service = await serveChannelAgent({ channel, agent });
 
 Both return `ChannelAgentService`; both must be stopped.
 
+## Acknowledgement reactions
+
+Set `acknowledge` to react to an incoming message the moment the service accepts it, before the
+agent starts. Pass an emoji string for the common case:
+
+```ts
+const service = createChannelAgent({
+  channel,
+  agent,
+  acknowledge: "👀",
+});
+```
+
+The full form can add a second reaction on the same message once a final response is delivered:
+
+```ts
+const service = createChannelAgent({
+  channel,
+  agent,
+  acknowledge: { reaction: "👀", completeReaction: "✅" },
+});
+```
+
+Behaviour and limits:
+
+- Reactions apply only to messages the service handles: bot-authored, lifecycle, and
+  filtered-out events are never acknowledged.
+- Reactions require `channel.capabilities.reactions === true` and `channel.react`. All three
+  standard adapters (Discord, Slack, Telegram) support them; the service silently skips
+  adapters that do not.
+- The completion reaction is added only after a final response is delivered — not while an
+  approval or question interaction is still pending.
+- A failed reaction is reported through `onError` with the `acknowledge` stage and never
+  interrupts the agent run or the reply.
+- Pass `acknowledge: false` (or omit it) to disable acknowledgements.
+
 ## Filtering
 
 The default filter handles:

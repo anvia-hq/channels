@@ -65,8 +65,9 @@ process.once("SIGTERM", () => {
 });
 ```
 
-The bridge handles default message filtering, stable conversation sessions, multimodal prompts,
-streaming edits, long-message splitting, native actions, and paused approval or question flows.
+The bridge handles default message filtering, stable conversation sessions, acknowledgement
+reactions (for example `acknowledge: "👀"`), multimodal prompts, streaming edits, long-message
+splitting, native actions, and paused approval or question flows.
 Use [the end-to-end guide](./docs/end-to-end.md) for agent construction, durable memory,
 interaction storage, attachment policy, and graceful shutdown.
 

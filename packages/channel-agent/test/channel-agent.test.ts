@@ -879,3 +879,104 @@ function fakeAgent<Output = string>(
       })),
   };
 }
+
+describe("ChannelAgentService acknowledgements", () => {
+  it("reacts to an accepted incoming message with the configured reaction", async () => {
+    const channel = new FakeChannel(Number.MAX_SAFE_INTEGER, true, true);
+    const service = await serveChannelAgent({
+      channel,
+      agent: fakeAgent({ streaming: false }),
+      acknowledge: { reaction: "👀", completeReaction: "✅" },
+    });
+
+    await channel.emit(messageEvent());
+
+    expect(channel.reacted.map((item) => [item.sent.id, item.reaction])).toEqual([
+      ["event-1", "👀"],
+      ["event-1", "✅"],
+    ]);
+    expect(channel.reacted[0]?.sent.address).toMatchObject({
+      platform: "telegram",
+      conversationId: "chat-1",
+    });
+    await service.stop();
+  });
+
+  it("accepts the string shorthand for the acknowledgement reaction", async () => {
+    const channel = new FakeChannel(Number.MAX_SAFE_INTEGER, true, true);
+    const service = await serveChannelAgent({
+      channel,
+      agent: fakeAgent({ streaming: false }),
+      acknowledge: "👀",
+    });
+
+    await channel.emit(messageEvent());
+
+    expect(channel.reacted.map((item) => item.reaction)).toEqual(["👀"]);
+    await service.stop();
+  });
+
+  it("skips the completion reaction while an interaction is pending", async () => {
+    const channel = new FakeChannel(Number.MAX_SAFE_INTEGER, true, true);
+    const service = await serveChannelAgent({
+      channel,
+      agent: fakeAgent({
+        streaming: false,
+        generate: async () => agentApproval(),
+      }),
+      interactions: { store: new MemoryChannelAgentInteractionStore() },
+      acknowledge: { reaction: "👀", completeReaction: "✅" },
+    });
+
+    await channel.emit(messageEvent());
+
+    expect(channel.reacted.map((item) => item.reaction)).toEqual(["👀"]);
+    await service.stop();
+  });
+
+  it("does not react when the channel cannot react or acknowledgement is disabled", async () => {
+    const channel = new FakeChannel(Number.MAX_SAFE_INTEGER, true, true);
+    const service = await serveChannelAgent({
+      channel,
+      agent: fakeAgent({ streaming: false }),
+      acknowledge: false,
+    });
+
+    await channel.emit(messageEvent());
+    expect(channel.reacted).toEqual([]);
+    await service.stop();
+
+    const plainChannel = new FakeChannel();
+    const plainService = await serveChannelAgent({
+      channel: plainChannel,
+      agent: fakeAgent({ streaming: false }),
+      acknowledge: "👀",
+    });
+
+    await plainChannel.emit(messageEvent());
+    expect(plainChannel.reacted).toEqual([]);
+    await plainService.stop();
+  });
+
+  it("reports reaction failures through onError and keeps processing", async () => {
+    const channel = new FakeChannel(Number.MAX_SAFE_INTEGER, true, true);
+    channel.reactError = new Error("reaction failed");
+    const onError = vi.fn();
+    const service = await serveChannelAgent({
+      channel,
+      agent: fakeAgent({ streaming: false }),
+      acknowledge: "👀",
+      onError,
+    });
+
+    await channel.emit(messageEvent());
+
+    expect(channel.reacted).toEqual([]);
+    expect(onError).toHaveBeenCalledWith(
+      expect.any(Error),
+      expect.objectContaining({ stage: "acknowledge" }),
+    );
+    expect(channel.edits.map((item) => item.message.text)).toEqual(["generated"]);
+    await service.stop();
+  });
+});
