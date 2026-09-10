@@ -6,6 +6,7 @@ import {
   REST,
   Routes,
   type ButtonInteraction,
+  type ChatInputCommandInteraction,
   type Interaction,
   type Message,
   type ClientEvents,
@@ -17,6 +18,7 @@ import type {
   DiscordGateway,
   DiscordGatewayAction,
   DiscordGatewayAttachment,
+  DiscordGatewayCommand,
   DiscordGatewayEvent,
   DiscordGatewayHandler,
   DiscordGatewayMessage,
@@ -26,6 +28,7 @@ import type {
   DiscordGatewaySentMessage,
   DiscordGatewayUser,
 } from "./types.js";
+import { discordCommandOptionText } from "./normalize.js";
 
 type DiscordRestClient = Readonly<{
   post(route: `/${string}`, options?: RestRequest): Promise<unknown>;
@@ -133,6 +136,16 @@ export class DiscordJsGateway implements DiscordGateway {
       let delivery: Promise<void>;
       delivery = Promise.resolve()
         .then(async () => {
+          if (interaction.isChatInputCommand()) {
+            const command = gatewayCommandFromDiscord(interaction, client);
+            if (command === undefined) return;
+            // Acknowledge the interaction so Discord does not surface an error;
+            // the actual response is delivered as a regular channel message.
+            await interaction.deferReply();
+            await interaction.deleteReply();
+            await handler(command);
+            return;
+          }
           if (!interaction.isButton()) return;
           const action = gatewayActionFromDiscord(interaction, client);
           if (action === undefined) return;
@@ -452,6 +465,34 @@ function gatewayReactionFromDiscord(
     gatewayReaction.parentChannelId = message.channel.parentId;
   }
   return gatewayReaction;
+}
+
+function gatewayCommandFromDiscord(
+  interaction: ChatInputCommandInteraction,
+  client: Client,
+): DiscordGatewayCommand | undefined {
+  const bot = client.user;
+  const channel = interaction.channel;
+  if (bot === null || channel === null) return undefined;
+  const thread = channel.isThread();
+  const command: Mutable<DiscordGatewayCommand> = {
+    type: "command",
+    id: interaction.id,
+    channelId: interaction.channelId,
+    user: gatewayUser(interaction.user),
+    bot: gatewayUser(bot),
+    name: interaction.commandName,
+    text: commandOptionText(interaction.options),
+    direct: channel.isDMBased(),
+    thread,
+  };
+  if (interaction.guildId !== null) command.guildId = interaction.guildId;
+  if (thread && channel.parentId !== null) command.parentChannelId = channel.parentId;
+  return command;
+}
+
+function commandOptionText(options: ChatInputCommandInteraction["options"]): string {
+  return discordCommandOptionText(options.data);
 }
 
 function gatewayActionFromDiscord(

@@ -5,6 +5,7 @@ import { sendChannelMessage } from "@anvia/channel";
 import type {
   ChannelActionEvent,
   ChannelAddress,
+  ChannelCommandEvent,
   ChannelEvent,
   ChannelMessage,
   ChannelMessageEvent,
@@ -28,6 +29,7 @@ import type { PendingChannelAgentInteraction } from "./interactions.js";
 import { channelMessagePrompt, resolveMultimodalOptions } from "./prompts.js";
 import type {
   ChannelAgentAcknowledgementOptions,
+  ChannelAgentCommandOptions,
   ChannelAgentErrorContext,
   ChannelAgentInteractionOptions,
   ChannelAgentOptions,
@@ -60,6 +62,11 @@ type ResolvedOptions<RawEvent, Output> = Readonly<{
   errorMessage: string | false;
   emptyResponseMessage: string;
   acknowledge: ChannelAgentAcknowledgementOptions | false;
+  commands:
+    | false
+    | Readonly<{
+        shouldHandle: NonNullable<ChannelAgentCommandOptions<RawEvent>["shouldHandle"]>;
+      }>;
   interactions:
     | false
     | Readonly<{
@@ -129,6 +136,23 @@ export class ChannelAgentService<RawEvent = unknown, Output = string> {
     if (event.type === "action") {
       if (event.sender.bot) return;
       await this.queue.run(channelConversationKey(event), () => this.processAction(event, signal));
+      return;
+    }
+    if (event.type === "command") {
+      if (event.sender.bot) return;
+      const commands = this.options.commands;
+      if (commands === false) return;
+      let shouldHandle: boolean;
+      try {
+        shouldHandle = await commands.shouldHandle(event);
+      } catch (error) {
+        await this.reportError(error, { stage: "filter", event });
+        return;
+      }
+      if (!shouldHandle || signal.aborted) return;
+      await this.queue.run(channelConversationKey(event), () =>
+        this.process(commandAsMessage(event), signal),
+      );
       return;
     }
     if (event.type !== "message") return;
@@ -670,6 +694,13 @@ function resolveOptions<RawEvent, Output>(
   const multimodal =
     options.multimodal === false ? false : resolveMultimodalOptions(options.multimodal);
   const acknowledge = resolveAcknowledgement(options.acknowledge);
+  const commands =
+    options.commands === false || options.commands === undefined
+      ? false
+      : {
+          shouldHandle:
+            (options.commands === true ? undefined : options.commands.shouldHandle) ?? (() => true),
+        };
 
   return {
     channel: options.channel,
@@ -699,9 +730,41 @@ function resolveOptions<RawEvent, Output>(
     errorMessage,
     emptyResponseMessage,
     acknowledge,
+    commands,
     interactions,
     onError: options.onError,
   };
+}
+
+/** Converts a command event into the message event shape the run pipeline understands. */
+function commandAsMessage<RawEvent>(
+  event: ChannelCommandEvent<RawEvent>,
+): ChannelMessageEvent<RawEvent> {
+  const text = event.text.length > 0 ? `/${event.name} ${event.text}` : `/${event.name}`;
+  const message: {
+    type: "message";
+    id: string;
+    platform: string;
+    accountId?: string;
+    conversation: ChannelCommandEvent<RawEvent>["conversation"];
+    sender: ChannelCommandEvent<RawEvent>["sender"];
+    text: string;
+    attachments: readonly [];
+    mentionedBot: boolean;
+    raw: RawEvent;
+  } = {
+    type: "message",
+    id: event.id,
+    platform: event.platform,
+    conversation: event.conversation,
+    sender: event.sender,
+    text,
+    attachments: [],
+    mentionedBot: true,
+    raw: event.raw,
+  };
+  if (event.accountId !== undefined) message.accountId = event.accountId;
+  return message;
 }
 
 function resolveAcknowledgement(

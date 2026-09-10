@@ -104,6 +104,44 @@ Behaviour and limits:
   interrupts the agent run or the reply.
 - Pass `acknowledge: false` (or omit it) to disable acknowledgements.
 
+## Slash commands
+
+Set `commands: true` to handle platform slash commands — Slack `/commands`, Discord application
+commands, and Telegram bot commands. The agent runs with the prompt `/<name> <text>`:
+
+```ts
+const service = createChannelAgent({
+  channel,
+  agent,
+  commands: true,
+});
+
+// Or decide per command:
+const service = createChannelAgent({
+  channel,
+  agent,
+  commands: {
+    shouldHandle(event) {
+      return event.name === "ask";
+    },
+  },
+});
+```
+
+Notes per platform:
+
+- **Slack**: register the command in your app config (Slash Commands) and run the app in Socket
+  Mode; the payload arrives as a `slash_commands` envelope and is acknowledged automatically.
+- **Discord**: register the application command (for example through the developer portal or a
+  registration script). The gateway handles chat-input interactions; the reply is delivered as a
+  regular channel message.
+- **Telegram**: commands (`/ask@botname`, `/ask`) are messages with a `bot_command` entity; the
+  adapter emits a `command` event for those addressed to this bot and publishes the command list
+  through BotFather or `setMyCommands`.
+
+Bot-authored commands are always ignored, and commands run through the same pipeline as messages:
+filtering, acknowledgement reactions, sessions, streaming, and interactions all apply.
+
 ## Filtering
 
 The default filter handles:

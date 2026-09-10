@@ -86,11 +86,45 @@ describe("normalizeTelegramUpdate", () => {
 
     const commandEvent = normalizeTelegramUpdate(command, bot)[0];
     const replyEvent = normalizeTelegramUpdate(reply, bot)[0];
-    expect(commandEvent?.type === "message" && commandEvent.mentionedBot).toBe(true);
+    expect(commandEvent).toMatchObject({
+      type: "command",
+      name: "ask",
+      text: "",
+      sender: { id: "7" },
+      conversation: { id: "-100", kind: "group" },
+    });
     expect(replyEvent?.type === "message" && replyEvent.mentionedBot).toBe(true);
     expect(replyEvent).toMatchObject({
       replyTo: { messageId: "99", sender: { id: "42", bot: true }, text: "previous" },
     });
+  });
+
+  it("normalizes bare commands into command events with argument text", () => {
+    const command = messageUpdate({
+      updateId: 14,
+      chatId: -100,
+      chatType: "private",
+      text: "/ask what time is it",
+      entities: [{ type: "bot_command", offset: 0, length: 4 }],
+    });
+
+    expect(normalizeTelegramUpdate(command, bot)[0]).toMatchObject({
+      type: "command",
+      name: "ask",
+      text: "what time is it",
+    });
+  });
+
+  it("ignores commands addressed to a different bot", () => {
+    const command = messageUpdate({
+      updateId: 15,
+      chatId: -100,
+      chatType: "group",
+      text: "/ask@other_bot",
+      entities: [{ type: "bot_command", offset: 0, length: 14 }],
+    });
+
+    expect(normalizeTelegramUpdate(command, bot)[0]?.type).toBe("message");
   });
 
   it("normalizes edited messages and reactions", () => {

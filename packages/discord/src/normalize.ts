@@ -1,5 +1,6 @@
 import type {
   ChannelActionEvent,
+  ChannelCommandEvent,
   ChannelConversation,
   ChannelEvent,
   ChannelMessageEvent,
@@ -7,7 +8,9 @@ import type {
 import { isChannelActionId } from "@anvia/channel";
 import { isDiscordSnowflake } from "./snowflake.js";
 import type {
+  DiscordCommandOption,
   DiscordGatewayAction,
+  DiscordGatewayCommand,
   DiscordGatewayEvent,
   DiscordGatewayMessage,
   DiscordGatewayMessageDeleted,
@@ -21,10 +24,61 @@ export function normalizeDiscordEvent(
   event: DiscordGatewayEvent,
 ): ChannelEvent<DiscordGatewayEvent> | undefined {
   if (event.type === "action") return normalizeDiscordAction(event);
+  if (event.type === "command") return normalizeDiscordCommand(event);
   if (event.type === "message-edited") return normalizeDiscordEdit(event);
   if (event.type === "message-deleted") return normalizeDiscordDelete(event);
   if (event.type === "reaction") return normalizeDiscordReaction(event);
   return normalizeDiscordMessage(event);
+}
+
+/**
+ * Serializes chat-input command options into argument text. Subcommand and
+ * subcommand-group options carry their parameters in nested `options`, so the
+ * whole option tree is traversed; subcommand names are kept for context.
+ */
+export function discordCommandOptionText(options: readonly DiscordCommandOption[]): string {
+  const parts: string[] = [];
+  const collect = (entries: readonly DiscordCommandOption[]): void => {
+    for (const option of entries) {
+      const nested = option.options;
+      if (nested !== undefined && nested.length > 0) {
+        parts.push(option.name);
+        collect(nested);
+        continue;
+      }
+      if (option.value === undefined) continue;
+      const value = typeof option.value === "string" ? option.value.trim() : String(option.value);
+      if (value.length > 0) parts.push(value);
+    }
+  };
+  collect(options);
+  return parts.join(" ");
+}
+
+export function normalizeDiscordCommand(
+  command: DiscordGatewayCommand,
+): ChannelCommandEvent<DiscordGatewayEvent> | undefined {
+  if (!isDiscordSnowflake(command.id) || !isDiscordSnowflake(command.channelId)) return undefined;
+  if (command.name.length === 0) return undefined;
+  const threadId = command.thread ? command.channelId : undefined;
+  const conversationId = command.thread
+    ? (command.parentChannelId ?? command.channelId)
+    : command.channelId;
+  return {
+    type: "command",
+    id: command.id,
+    platform: "discord",
+    accountId: command.bot.id,
+    conversation: conversation(conversationId, command.direct, threadId),
+    sender: {
+      id: command.user.id,
+      displayName: command.user.globalName ?? command.user.username,
+      bot: command.user.bot,
+    },
+    name: command.name,
+    text: command.text,
+    raw: command,
+  };
 }
 
 export function normalizeDiscordMessage(

@@ -7,7 +7,11 @@ import type {
   ChannelOutboundAttachment,
 } from "@anvia/channel";
 import { isSlackDownloadUrl, isSlackId, isSlackTimestamp } from "./identifiers.js";
-import { parseSlackSocketEvent, parseSlackSocketInteraction } from "./socket-event.js";
+import {
+  parseSlackSocketCommand,
+  parseSlackSocketEvent,
+  parseSlackSocketInteraction,
+} from "./socket-event.js";
 import type {
   SlackIdentity,
   SlackSentMessage,
@@ -209,7 +213,9 @@ export class SlackSocketTransport implements SlackTransport {
         ? parseSlackSocketEvent(request.body, identity)
         : request.type === "interactive"
           ? parseSlackSocketInteraction(request.body, identity)
-          : undefined;
+          : request.type === "slash_commands"
+            ? parseSlackSocketCommand(request.body, identity)
+            : undefined;
     if (event === undefined) return;
     const key = event.eventId;
     if (this.rememberedMessages.has(key)) return;

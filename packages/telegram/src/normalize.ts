@@ -1,5 +1,6 @@
 import type {
   ChannelActionEvent,
+  ChannelCommandEvent,
   ChannelConversation,
   ChannelConversationKind,
   ChannelEvent,
@@ -11,6 +12,7 @@ import { isChannelActionId } from "@anvia/channel";
 import type {
   TelegramChat,
   TelegramChatType,
+  TelegramMessage,
   TelegramMessageEntity,
   TelegramReactionType,
   TelegramUpdate,
@@ -18,6 +20,48 @@ import type {
 } from "./types.js";
 
 type Mutable<T> = { -readonly [Key in keyof T]: T[Key] };
+
+function telegramCommand(
+  update: TelegramUpdate,
+  message: TelegramMessage,
+  text: string,
+  bot: TelegramUser,
+): ChannelCommandEvent<TelegramUpdate> | undefined {
+  const entity = (message.entities ?? []).find(
+    (candidate) => candidate.type === "bot_command" && candidate.offset === 0,
+  );
+  if (entity === undefined) return undefined;
+  const raw = text.slice(entity.offset, entity.offset + entity.length);
+  const withTarget = raw.slice(1);
+  const at = withTarget.indexOf("@");
+  const name = (at === -1 ? withTarget : withTarget.slice(0, at)).trim().toLowerCase();
+  if (name.length === 0) return undefined;
+  if (at !== -1) {
+    const target = withTarget
+      .slice(at + 1)
+      .trim()
+      .toLowerCase();
+    const username = bot.username?.toLowerCase();
+    if (target.length > 0 && (username === undefined || target !== username)) return undefined;
+  }
+  const sender = message.from;
+  if (sender === undefined) return undefined;
+  return {
+    type: "command",
+    id: String(update.update_id),
+    platform: "telegram",
+    accountId: String(bot.id),
+    conversation: conversation(message.chat, message.message_thread_id),
+    sender: {
+      id: String(sender.id),
+      displayName: displayName(sender),
+      bot: sender.is_bot,
+    },
+    name,
+    text: text.slice(entity.offset + entity.length).trim(),
+    raw: update,
+  };
+}
 
 export function normalizeTelegramUpdate(
   update: TelegramUpdate,
@@ -31,6 +75,9 @@ export function normalizeTelegramUpdate(
   const text = message.text ?? message.caption ?? "";
   const attachments = telegramAttachments(message);
   if (text.length === 0 && attachments.length === 0) return [];
+
+  const command = telegramCommand(update, message, text, bot);
+  if (command !== undefined) return eventArray(command);
 
   const threadId = message.message_thread_id;
   const event: Mutable<ChannelMessageEvent<TelegramUpdate>> = {
