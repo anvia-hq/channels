@@ -278,7 +278,8 @@ describe("parseSlackSocketCommand", () => {
 
   it("rejects malformed payloads", () => {
     expect(parseSlackSocketCommand({}, identity)).toBeUndefined();
-    expect(parseSlackSocketCommand({ command: "/ask", channel_id: "C1", user_id: "U1" }, identity))
-      .toBeUndefined();
+    expect(
+      parseSlackSocketCommand({ command: "/ask", channel_id: "C1", user_id: "U1" }, identity),
+    ).toBeUndefined();
   });
 });

@@ -36,9 +36,7 @@ export function normalizeDiscordEvent(
  * subcommand-group options carry their parameters in nested `options`, so the
  * whole option tree is traversed; subcommand names are kept for context.
  */
-export function discordCommandOptionText(
-  options: readonly DiscordCommandOption[],
-): string {
+export function discordCommandOptionText(options: readonly DiscordCommandOption[]): string {
   const parts: string[] = [];
   const collect = (entries: readonly DiscordCommandOption[]): void => {
     for (const option of entries) {
