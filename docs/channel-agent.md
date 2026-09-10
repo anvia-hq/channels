@@ -130,6 +130,27 @@ const service = createChannelAgent({
 });
 ```
 
+Named commands can override the shared pipeline per command. Every field is optional and falls
+back to the shared behaviour; the per-command filter is applied in addition to the shared one:
+
+```ts
+const service = createChannelAgent({
+  channel,
+  agent,
+  commands: {
+    commands: {
+      ask: {
+        createPrompt: ({ event }) => `Answer concisely: ${event.text}`,
+      },
+      reset: {
+        // Runs without conversation memory.
+        createSession: () => undefined,
+      },
+    },
+  },
+});
+```
+
 Notes per platform:
 
 - **Slack**: register the command in your app config (Slash Commands) and run the app in Socket
