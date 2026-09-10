@@ -1106,3 +1106,88 @@ describe("ChannelAgentService acknowledgement completion", () => {
     await service.stop();
   });
 });
+
+describe("ChannelAgentService per-command configuration", () => {
+  it("applies per-command prompt, session, and renderer overrides", async () => {
+    const channel = new FakeChannel();
+    const generate = vi
+      .fn<ChannelAgentExecutor["generate"]>()
+      .mockResolvedValue(agentResponse("raw output"));
+    const commandSession = vi.fn((_name: string) => undefined);
+    const commandPrompt = vi.fn(() => "custom prompt");
+    const service = await serveChannelAgent({
+      channel,
+      agent: fakeAgent({ generate, streaming: false }),
+      commands: {
+        commands: {
+          ask: {
+            createPrompt: ({ event }) => {
+              commandPrompt();
+              return `${event.name}:${event.text}`;
+            },
+            createSession: (event) => {
+              expect(event.name).toBe("ask");
+              commandSession(event.name);
+              return undefined;
+            },
+            renderOutcome: () => "rendered",
+          },
+        },
+      },
+    });
+
+    await channel.emit(commandEvent());
+
+    expect(generate.mock.calls[0]?.[0].prompt).toBe("ask:hello there");
+    expect(commandSession).toHaveBeenCalledWith("ask");
+    expect(channel.edits.map((item) => item.message.text)).toEqual(["rendered"]);
+    await service.stop();
+  });
+
+  it("falls back to shared behaviour for unlisted commands and shared handlers", async () => {
+    const channel = new FakeChannel();
+    const generate = vi
+      .fn<ChannelAgentExecutor["generate"]>()
+      .mockResolvedValue(agentResponse("fallback"));
+    const service = await serveChannelAgent({
+      channel,
+      agent: fakeAgent({ generate, streaming: false }),
+      commands: {
+        commands: {
+          ask: { renderOutcome: () => "rendered" },
+        },
+      },
+    });
+
+    await channel.emit(commandEvent({ name: "other", text: "" }));
+    expect(channel.edits.map((item) => item.message.text)).toEqual(["fallback"]);
+    await channel.emit(commandEvent({ name: "ask", text: "" }));
+    expect(channel.edits.map((item) => item.message.text)).toEqual(["fallback", "rendered"]);
+    await service.stop();
+  });
+
+  it("combines the shared and per-command filters", async () => {
+    const channel = new FakeChannel();
+    const generate = vi
+      .fn<ChannelAgentExecutor["generate"]>()
+      .mockResolvedValue(agentResponse("answer"));
+    const service = await serveChannelAgent({
+      channel,
+      agent: fakeAgent({ generate, streaming: false }),
+      commands: {
+        shouldHandle: (event) => event.name !== "blocked",
+        commands: {
+          ask: { shouldHandle: (event) => event.text.length > 0 },
+        },
+      },
+    });
+
+    await channel.emit(commandEvent({ name: "blocked", text: "hi" }));
+    await channel.emit(commandEvent({ name: "ask", text: "" }));
+    expect(generate).not.toHaveBeenCalled();
+
+    await channel.emit(commandEvent({ name: "ask", text: "go" }));
+    expect(generate).toHaveBeenCalledOnce();
+    await service.stop();
+  });
+});
