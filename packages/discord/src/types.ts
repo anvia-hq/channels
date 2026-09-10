@@ -7,6 +7,13 @@ export type DiscordGatewayUser = Readonly<{
   bot: boolean;
 }>;
 
+/** Minimal structural view of a chat-input command option, including subcommand nesting. */
+export type DiscordCommandOption = Readonly<{
+  name: string;
+  value?: unknown;
+  options?: readonly DiscordCommandOption[];
+}>;
+
 export type DiscordGatewayAttachment = Readonly<{
   id: string;
   url: string;

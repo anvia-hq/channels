@@ -28,6 +28,7 @@ import type {
   DiscordGatewaySentMessage,
   DiscordGatewayUser,
 } from "./types.js";
+import { discordCommandOptionText } from "./normalize.js";
 
 type DiscordRestClient = Readonly<{
   post(route: `/${string}`, options?: RestRequest): Promise<unknown>;
@@ -491,14 +492,7 @@ function gatewayCommandFromDiscord(
 }
 
 function commandOptionText(options: ChatInputCommandInteraction["options"]): string {
-  return options.data
-    .map((option) => {
-      if (option.value === undefined) return "";
-      if (typeof option.value === "string") return option.value.trim();
-      return String(option.value);
-    })
-    .filter((value) => value.length > 0)
-    .join(" ");
+  return discordCommandOptionText(options.data);
 }
 
 function gatewayActionFromDiscord(

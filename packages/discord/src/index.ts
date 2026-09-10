@@ -3,6 +3,7 @@ export type { DiscordChannelErrorContext, DiscordChannelOptions } from "./discor
 export { DiscordJsGateway } from "./discord-js-gateway.js";
 export type { DiscordJsGatewayOptions } from "./discord-js-gateway.js";
 export {
+  discordCommandOptionText,
   normalizeDiscordAction,
   normalizeDiscordCommand,
   normalizeDiscordEvent,
@@ -10,6 +11,7 @@ export {
 } from "./normalize.js";
 export { isDiscordSnowflake, validateDiscordSnowflake } from "./snowflake.js";
 export type {
+  DiscordCommandOption,
   DiscordGateway,
   DiscordGatewayAction,
   DiscordGatewayAttachment,

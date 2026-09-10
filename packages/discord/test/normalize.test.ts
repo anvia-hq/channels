@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  discordCommandOptionText,
   normalizeDiscordAction,
   normalizeDiscordEvent,
   normalizeDiscordMessage,
@@ -218,5 +219,28 @@ describe("normalizeDiscordCommand", () => {
       normalizeDiscordEvent({ ...base, id: "not-a-snowflake", name: "ask", text: "" }),
     ).toBeUndefined();
     expect(normalizeDiscordEvent({ ...base, name: "", text: "" })).toBeUndefined();
+  });
+});
+
+describe("discordCommandOptionText", () => {
+  it("serializes nested subcommand and group options", () => {
+    expect(
+      discordCommandOptionText([
+        {
+          name: "team",
+          options: [
+            {
+              name: "add",
+              options: [
+                { name: "user", value: " @indra " },
+                { name: "role", value: 5 },
+              ],
+            },
+          ],
+        },
+        { name: "verbose", value: true },
+        { name: "empty" },
+      ]),
+    ).toBe("team add @indra 5 true");
   });
 });

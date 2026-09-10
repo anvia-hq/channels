@@ -8,6 +8,7 @@ import type {
 import { isChannelActionId } from "@anvia/channel";
 import { isDiscordSnowflake } from "./snowflake.js";
 import type {
+  DiscordCommandOption,
   DiscordGatewayAction,
   DiscordGatewayCommand,
   DiscordGatewayEvent,
@@ -28,6 +29,32 @@ export function normalizeDiscordEvent(
   if (event.type === "message-deleted") return normalizeDiscordDelete(event);
   if (event.type === "reaction") return normalizeDiscordReaction(event);
   return normalizeDiscordMessage(event);
+}
+
+/**
+ * Serializes chat-input command options into argument text. Subcommand and
+ * subcommand-group options carry their parameters in nested `options`, so the
+ * whole option tree is traversed; subcommand names are kept for context.
+ */
+export function discordCommandOptionText(
+  options: readonly DiscordCommandOption[],
+): string {
+  const parts: string[] = [];
+  const collect = (entries: readonly DiscordCommandOption[]): void => {
+    for (const option of entries) {
+      const nested = option.options;
+      if (nested !== undefined && nested.length > 0) {
+        parts.push(option.name);
+        collect(nested);
+        continue;
+      }
+      if (option.value === undefined) continue;
+      const value = typeof option.value === "string" ? option.value.trim() : String(option.value);
+      if (value.length > 0) parts.push(value);
+    }
+  };
+  collect(options);
+  return parts.join(" ");
 }
 
 export function normalizeDiscordCommand(

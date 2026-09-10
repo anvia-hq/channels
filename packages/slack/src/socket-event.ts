@@ -155,7 +155,10 @@ export function parseSlackSocketCommand(
   body: unknown,
   identity: SlackIdentity,
 ): SlackSocketCommand | undefined {
-  if (!isRecord(body) || body.type !== "slash_commands") return undefined;
+  // The Socket Mode SDK dispatches on the outer request type ("slash_commands")
+  // and passes only the inner payload as the body, so the payload itself has no
+  // discriminator field. The transport has already routed by request type.
+  if (!isRecord(body)) return undefined;
   if (typeof body.command !== "string") return undefined;
   const name = body.command.replace(/^\//, "").trim();
   if (name.length === 0) return undefined;

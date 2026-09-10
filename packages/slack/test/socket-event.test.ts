@@ -251,11 +251,10 @@ function eventCallback(
 describe("parseSlackSocketCommand", () => {
   const identity = { teamId: "T1", botUserId: "B1" };
 
-  it("parses a slash_commands envelope", () => {
+  it("parses the inner slash_commands payload (no discriminator field)", () => {
     expect(
       parseSlackSocketCommand(
         {
-          type: "slash_commands",
           team_id: "T1",
           channel_id: "C1",
           user_id: "U1",
@@ -277,13 +276,9 @@ describe("parseSlackSocketCommand", () => {
     });
   });
 
-  it("rejects malformed envelopes", () => {
-    expect(parseSlackSocketCommand({ type: "other" }, identity)).toBeUndefined();
-    expect(
-      parseSlackSocketCommand(
-        { type: "slash_commands", command: "/ask", channel_id: "C1", user_id: "U1" },
-        identity,
-      ),
-    ).toBeUndefined();
+  it("rejects malformed payloads", () => {
+    expect(parseSlackSocketCommand({}, identity)).toBeUndefined();
+    expect(parseSlackSocketCommand({ command: "/ask", channel_id: "C1", user_id: "U1" }, identity))
+      .toBeUndefined();
   });
 });
