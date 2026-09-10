@@ -131,4 +131,5 @@ export interface DiscordGateway {
   delete(channelId: string, messageId: string): Promise<void>;
   showTyping(channelId: string): Promise<void>;
   react(channelId: string, messageId: string, reaction: string): Promise<void>;
+  unreact(channelId: string, messageId: string, reaction: string): Promise<void>;
 }

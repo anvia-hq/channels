@@ -118,9 +118,11 @@ describe("DiscordChannel", () => {
 
     await channel.showTyping(sent.address);
     await channel.react(sent, "👍");
+    await channel.unreact(sent, "👍");
     await channel.delete(sent);
     expect(fake.showTyping).toHaveBeenCalledWith("21");
     expect(fake.react).toHaveBeenCalledWith("21", "77", "👍");
+    expect(fake.unreact).toHaveBeenCalledWith("21", "77", "👍");
     expect(fake.delete).toHaveBeenCalledWith("21", "77");
   });
 

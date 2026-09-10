@@ -340,6 +340,7 @@ type FakeWebClient = Readonly<{
   updateMessage: ReturnType<typeof vi.fn<SlackWebClient["updateMessage"]>>;
   deleteMessage: ReturnType<typeof vi.fn<SlackWebClient["deleteMessage"]>>;
   addReaction: ReturnType<typeof vi.fn<SlackWebClient["addReaction"]>>;
+  removeReaction: ReturnType<typeof vi.fn<SlackWebClient["removeReaction"]>>;
   uploadFile: ReturnType<typeof vi.fn<SlackWebClient["uploadFile"]>>;
   downloadFile: ReturnType<typeof vi.fn<SlackWebClient["downloadFile"]>>;
 }>;
@@ -352,6 +353,7 @@ function fakeWebClient(): FakeWebClient {
   const updateMessage = vi.fn<SlackWebClient["updateMessage"]>().mockResolvedValue({ ok: true });
   const deleteMessage = vi.fn<SlackWebClient["deleteMessage"]>().mockResolvedValue({ ok: true });
   const addReaction = vi.fn<SlackWebClient["addReaction"]>().mockResolvedValue({ ok: true });
+  const removeReaction = vi.fn<SlackWebClient["removeReaction"]>().mockResolvedValue({ ok: true });
   const uploadFile = vi.fn<SlackWebClient["uploadFile"]>().mockResolvedValue({ ok: true });
   const downloadFile = vi.fn<SlackWebClient["downloadFile"]>().mockResolvedValue({
     type: "data",
@@ -364,6 +366,7 @@ function fakeWebClient(): FakeWebClient {
       updateMessage,
       deleteMessage,
       addReaction,
+      removeReaction,
       uploadFile,
       downloadFile,
     },
@@ -372,6 +375,7 @@ function fakeWebClient(): FakeWebClient {
     updateMessage,
     deleteMessage,
     addReaction,
+    removeReaction,
     uploadFile,
     downloadFile,
   };

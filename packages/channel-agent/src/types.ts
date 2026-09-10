@@ -84,6 +84,12 @@ export type ChannelAgentAcknowledgementOptions = Readonly<{
   reaction: string;
   /** Optional reaction added to the same message once a final response is delivered. */
   completeReaction?: string;
+  /**
+   * Whether the acceptance reaction is removed when the response is delivered
+   * and the channel supports reaction removals. Defaults to `true` when a
+   * `completeReaction` is configured.
+   */
+  clearOnCompletion?: boolean;
 }>;
 
 export type ChannelAgentInteractionOptions<RawEvent = unknown> = Readonly<{

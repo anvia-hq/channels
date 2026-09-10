@@ -407,6 +407,9 @@ export class ChannelAgentService<RawEvent = unknown, Output = string> {
       acknowledge.completeReaction !== undefined &&
       event.type === "message"
     ) {
+      if (acknowledge.clearOnCompletion !== false) {
+        await this.unreactFromEvent(event, acknowledge.reaction, signal);
+      }
       await this.reactToEvent(event, acknowledge.completeReaction, signal);
     }
   }
@@ -432,6 +435,22 @@ export class ChannelAgentService<RawEvent = unknown, Output = string> {
     const sent: SentChannelMessage = { id: event.id, address: eventAddress(event) };
     try {
       await channel.react.call(channel, sent, reaction);
+    } catch (error) {
+      await this.reportError(error, { stage: "acknowledge", event });
+    }
+  }
+
+  private async unreactFromEvent(
+    event: ChannelMessageEvent<RawEvent>,
+    reaction: string,
+    signal: AbortSignal,
+  ): Promise<void> {
+    if (signal.aborted) return;
+    const channel = this.options.channel;
+    if (channel.capabilities?.reactionRemovals !== true || channel.unreact === undefined) return;
+    const sent: SentChannelMessage = { id: event.id, address: eventAddress(event) };
+    try {
+      await channel.unreact.call(channel, sent, reaction);
     } catch (error) {
       await this.reportError(error, { stage: "acknowledge", event });
     }
