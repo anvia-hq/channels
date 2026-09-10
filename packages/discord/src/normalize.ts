@@ -1,5 +1,6 @@
 import type {
   ChannelActionEvent,
+  ChannelCommandEvent,
   ChannelConversation,
   ChannelEvent,
   ChannelMessageEvent,
@@ -8,6 +9,7 @@ import { isChannelActionId } from "@anvia/channel";
 import { isDiscordSnowflake } from "./snowflake.js";
 import type {
   DiscordGatewayAction,
+  DiscordGatewayCommand,
   DiscordGatewayEvent,
   DiscordGatewayMessage,
   DiscordGatewayMessageDeleted,
@@ -21,10 +23,37 @@ export function normalizeDiscordEvent(
   event: DiscordGatewayEvent,
 ): ChannelEvent<DiscordGatewayEvent> | undefined {
   if (event.type === "action") return normalizeDiscordAction(event);
+  if (event.type === "command") return normalizeDiscordCommand(event);
   if (event.type === "message-edited") return normalizeDiscordEdit(event);
   if (event.type === "message-deleted") return normalizeDiscordDelete(event);
   if (event.type === "reaction") return normalizeDiscordReaction(event);
   return normalizeDiscordMessage(event);
+}
+
+export function normalizeDiscordCommand(
+  command: DiscordGatewayCommand,
+): ChannelCommandEvent<DiscordGatewayEvent> | undefined {
+  if (!isDiscordSnowflake(command.id) || !isDiscordSnowflake(command.channelId)) return undefined;
+  if (command.name.length === 0) return undefined;
+  const threadId = command.thread ? command.channelId : undefined;
+  const conversationId = command.thread
+    ? (command.parentChannelId ?? command.channelId)
+    : command.channelId;
+  return {
+    type: "command",
+    id: command.id,
+    platform: "discord",
+    accountId: command.bot.id,
+    conversation: conversation(conversationId, command.direct, threadId),
+    sender: {
+      id: command.user.id,
+      displayName: command.user.globalName ?? command.user.username,
+      bot: command.user.bot,
+    },
+    name: command.name,
+    text: command.text,
+    raw: command,
+  };
 }
 
 export function normalizeDiscordMessage(

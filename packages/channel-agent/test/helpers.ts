@@ -6,6 +6,7 @@ import type {
   ChannelAddress,
   ChannelAttachment,
   ChannelAttachmentData,
+  ChannelCommandEvent,
   ChannelEvent,
   ChannelEventHandler,
   ChannelMessage,
@@ -116,6 +117,20 @@ export type MessageEventOverrides = Readonly<{
   mentionedBot?: boolean;
   attachments?: ChannelMessageEvent["attachments"];
 }>;
+
+export function commandEvent(overrides: Partial<ChannelCommandEvent> = {}): ChannelCommandEvent {
+  return {
+    type: "command",
+    id: overrides.id ?? "command-event-1",
+    platform: overrides.platform ?? "telegram",
+    accountId: overrides.accountId ?? "42",
+    conversation: overrides.conversation ?? { id: "chat-1", kind: "direct" },
+    sender: overrides.sender ?? { id: "user-1", displayName: "User", bot: false },
+    name: overrides.name ?? "ask",
+    text: overrides.text ?? "hello there",
+    raw: overrides.raw ?? {},
+  };
+}
 
 export function messageEvent(overrides: MessageEventOverrides = {}): ChannelMessageEvent {
   return {

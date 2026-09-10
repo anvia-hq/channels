@@ -131,9 +131,24 @@ export type ChannelActionEvent<RawEvent = unknown> = Readonly<{
   raw: RawEvent;
 }>;
 
+export type ChannelCommandEvent<RawEvent = unknown> = Readonly<{
+  type: "command";
+  id: string;
+  platform: string;
+  accountId?: string;
+  conversation: ChannelConversation;
+  sender: ChannelSender;
+  /** Command name without the leading slash, for example "ask" for "/ask". */
+  name: string;
+  /** Argument text after the command name; empty when the command has no arguments. */
+  text: string;
+  raw: RawEvent;
+}>;
+
 export type ChannelEvent<RawEvent = unknown> =
   | ChannelMessageEvent<RawEvent>
   | ChannelActionEvent<RawEvent>
+  | ChannelCommandEvent<RawEvent>
   | ChannelMessageEditedEvent<RawEvent>
   | ChannelMessageDeletedEvent<RawEvent>
   | ChannelReactionEvent<RawEvent>;

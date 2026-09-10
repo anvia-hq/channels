@@ -5,6 +5,7 @@ import type {
   SlackFile,
   SlackIdentity,
   SlackSocketAction,
+  SlackSocketCommand,
   SlackSocketEvent,
   SlackSocketMessage,
   SlackSocketMessageDeleted,
@@ -16,7 +17,7 @@ type Mutable<T> = { -readonly [Key in keyof T]: T[Key] };
 export function parseSlackSocketEvent(
   body: unknown,
   identity: SlackIdentity,
-): Exclude<SlackSocketEvent, SlackSocketAction> | undefined {
+): Exclude<SlackSocketEvent, SlackSocketAction | SlackSocketCommand> | undefined {
   if (!isRecord(body) || body.type !== "event_callback" || !nonemptyString(body.event_id)) {
     return undefined;
   }
@@ -69,7 +70,9 @@ function parseLifecycleEvent(
   body: Record<string, unknown>,
   event: Record<string, unknown>,
   identity: SlackIdentity,
-): Exclude<SlackSocketEvent, SlackSocketAction | SlackSocketMessage> | undefined {
+):
+  | Exclude<SlackSocketEvent, SlackSocketAction | SlackSocketCommand | SlackSocketMessage>
+  | undefined {
   const teamId = isSlackId(body.team_id) ? body.team_id : identity.teamId;
   if (event.type === "reaction_added" || event.type === "reaction_removed") {
     const item = event.item;
@@ -146,6 +149,37 @@ function parseLifecycleEvent(
   if (threadTimestamp !== undefined) edited.threadTimestamp = threadTimestamp;
   if (senderDisplayName !== undefined) edited.senderDisplayName = senderDisplayName;
   return edited;
+}
+
+export function parseSlackSocketCommand(
+  body: unknown,
+  identity: SlackIdentity,
+): SlackSocketCommand | undefined {
+  if (!isRecord(body) || body.type !== "slash_commands") return undefined;
+  if (typeof body.command !== "string") return undefined;
+  const name = body.command.replace(/^\//, "").trim();
+  if (name.length === 0) return undefined;
+  if (
+    !isSlackId(body.channel_id) ||
+    !isSlackId(body.user_id) ||
+    !isSlackId(body.team_id) ||
+    !nonemptyString(body.trigger_id)
+  ) {
+    return undefined;
+  }
+  const command: Mutable<SlackSocketCommand> = {
+    type: "command",
+    eventId: body.trigger_id,
+    teamId: body.team_id,
+    channelId: body.channel_id,
+    channelType: slackChannelType(undefined, body.channel_id),
+    senderId: body.user_id,
+    name,
+    text: typeof body.text === "string" ? body.text.trim() : "",
+    botUserId: identity.botUserId,
+  };
+  if (nonemptyString(body.user_name)) command.senderDisplayName = body.user_name;
+  return command;
 }
 
 export function parseSlackSocketInteraction(

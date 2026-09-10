@@ -4,6 +4,7 @@ export { DiscordJsGateway } from "./discord-js-gateway.js";
 export type { DiscordJsGatewayOptions } from "./discord-js-gateway.js";
 export {
   normalizeDiscordAction,
+  normalizeDiscordCommand,
   normalizeDiscordEvent,
   normalizeDiscordMessage,
 } from "./normalize.js";
@@ -12,6 +13,7 @@ export type {
   DiscordGateway,
   DiscordGatewayAction,
   DiscordGatewayAttachment,
+  DiscordGatewayCommand,
   DiscordGatewayHandler,
   DiscordGatewayEvent,
   DiscordGatewayMessageDeleted,

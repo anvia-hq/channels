@@ -176,3 +176,47 @@ describe("normalizeDiscordMessage", () => {
     ).toBeUndefined();
   });
 });
+
+describe("normalizeDiscordCommand", () => {
+  it("normalizes chat-input command events", () => {
+    const command = {
+      type: "command" as const,
+      id: "77",
+      channelId: "20",
+      user: { id: "40", username: "indra", bot: false },
+      bot: { id: "50", username: "Anvia", bot: true },
+      name: "ask",
+      text: "hello world",
+      direct: true,
+      thread: false,
+    };
+
+    expect(normalizeDiscordEvent(command)).toEqual({
+      type: "command",
+      id: "77",
+      platform: "discord",
+      accountId: "50",
+      conversation: { id: "20", kind: "direct" },
+      sender: { id: "40", displayName: "indra", bot: false },
+      name: "ask",
+      text: "hello world",
+      raw: command,
+    });
+  });
+
+  it("rejects malformed command events", () => {
+    const base = {
+      type: "command" as const,
+      id: "77",
+      channelId: "20",
+      user: { id: "40", username: "indra", bot: false },
+      bot: { id: "50", username: "Anvia", bot: true },
+      direct: true,
+      thread: false,
+    };
+    expect(
+      normalizeDiscordEvent({ ...base, id: "not-a-snowflake", name: "ask", text: "" }),
+    ).toBeUndefined();
+    expect(normalizeDiscordEvent({ ...base, name: "", text: "" })).toBeUndefined();
+  });
+});

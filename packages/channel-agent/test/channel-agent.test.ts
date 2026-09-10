@@ -10,12 +10,14 @@ import type { ChannelAgentExecutor, ChannelAgentRunInput } from "../src/index.js
 import {
   FakeChannel,
   actionEvent,
+  commandEvent,
   agentApproval,
   agentResponse,
   deferred,
   messageEvent,
   textStream,
 } from "./helpers.js";
+import type { ChannelCommandEvent } from "@anvia/channel";
 
 describe("ChannelAgentService", () => {
   it("runs an agent with the default prompt and memory scope", async () => {
@@ -977,6 +979,79 @@ describe("ChannelAgentService acknowledgements", () => {
       expect.objectContaining({ stage: "acknowledge" }),
     );
     expect(channel.edits.map((item) => item.message.text)).toEqual(["generated"]);
+    await service.stop();
+  });
+});
+
+describe("ChannelAgentService commands", () => {
+  it("ignores command events when commands are not enabled", async () => {
+    const channel = new FakeChannel();
+    const generate = vi
+      .fn<ChannelAgentExecutor["generate"]>()
+      .mockResolvedValue(agentResponse("unused"));
+    const service = await serveChannelAgent({
+      channel,
+      agent: fakeAgent({ generate, streaming: false }),
+    });
+
+    await channel.emit(commandEvent());
+    expect(generate).not.toHaveBeenCalled();
+    expect(channel.sent).toEqual([]);
+    await service.stop();
+  });
+
+  it("runs the agent for enabled commands with a /name text prompt", async () => {
+    const channel = new FakeChannel();
+    const generate = vi
+      .fn<ChannelAgentExecutor["generate"]>()
+      .mockResolvedValue(agentResponse("answer"));
+    const service = await serveChannelAgent({
+      channel,
+      agent: fakeAgent({ generate, streaming: false }),
+      commands: true,
+    });
+
+    await channel.emit(commandEvent());
+    expect(generate).toHaveBeenCalledOnce();
+    expect(generate.mock.calls[0]?.[0].prompt).toBe("/ask hello there");
+    expect(channel.edits.map((item) => item.message.text)).toEqual(["answer"]);
+    await service.stop();
+  });
+
+  it("supports a custom command filter", async () => {
+    const channel = new FakeChannel();
+    const generate = vi
+      .fn<ChannelAgentExecutor["generate"]>()
+      .mockResolvedValue(agentResponse("answer"));
+    const shouldHandle = vi.fn((event: ChannelCommandEvent) => event.name === "ask");
+    const service = await serveChannelAgent({
+      channel,
+      agent: fakeAgent({ generate, streaming: false }),
+      commands: { shouldHandle },
+    });
+
+    await channel.emit(commandEvent({ name: "other" }));
+    expect(generate).not.toHaveBeenCalled();
+    await channel.emit(commandEvent({ name: "ask", text: "" }));
+    expect(generate).toHaveBeenCalledOnce();
+    expect(generate.mock.calls[0]?.[0].prompt).toBe("/ask");
+    expect(shouldHandle).toHaveBeenCalledTimes(2);
+    await service.stop();
+  });
+
+  it("ignores bot-authored commands", async () => {
+    const channel = new FakeChannel();
+    const generate = vi
+      .fn<ChannelAgentExecutor["generate"]>()
+      .mockResolvedValue(agentResponse("answer"));
+    const service = await serveChannelAgent({
+      channel,
+      agent: fakeAgent({ generate, streaming: false }),
+      commands: true,
+    });
+
+    await channel.emit(commandEvent({ sender: { id: "bot-1", displayName: "Bot", bot: true } }));
+    expect(generate).not.toHaveBeenCalled();
     await service.stop();
   });
 });

@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { parseSlackSocketEvent, parseSlackSocketInteraction } from "../src/index.js";
+import {
+  parseSlackSocketCommand,
+  parseSlackSocketEvent,
+  parseSlackSocketInteraction,
+} from "../src/index.js";
 
 const identity = { teamId: "T1", botUserId: "U2" };
 
@@ -243,3 +247,43 @@ function eventCallback(
     event,
   };
 }
+
+describe("parseSlackSocketCommand", () => {
+  const identity = { teamId: "T1", botUserId: "B1" };
+
+  it("parses a slash_commands envelope", () => {
+    expect(
+      parseSlackSocketCommand(
+        {
+          type: "slash_commands",
+          team_id: "T1",
+          channel_id: "C1",
+          user_id: "U1",
+          user_name: "indra",
+          command: "/ask",
+          text: "  hello world ",
+          trigger_id: "trigger-1",
+        },
+        identity,
+      ),
+    ).toMatchObject({
+      type: "command",
+      eventId: "trigger-1",
+      channelId: "C1",
+      senderId: "U1",
+      senderDisplayName: "indra",
+      name: "ask",
+      text: "hello world",
+    });
+  });
+
+  it("rejects malformed envelopes", () => {
+    expect(parseSlackSocketCommand({ type: "other" }, identity)).toBeUndefined();
+    expect(
+      parseSlackSocketCommand(
+        { type: "slash_commands", command: "/ask", channel_id: "C1", user_id: "U1" },
+        identity,
+      ),
+    ).toBeUndefined();
+  });
+});

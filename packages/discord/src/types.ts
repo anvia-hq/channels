@@ -48,6 +48,22 @@ export type DiscordGatewayAction = Readonly<{
   thread: boolean;
 }>;
 
+export type DiscordGatewayCommand = Readonly<{
+  type: "command";
+  id: string;
+  channelId: string;
+  guildId?: string;
+  parentChannelId?: string;
+  user: DiscordGatewayUser;
+  bot: DiscordGatewayUser;
+  /** Application command name without the leading slash, for example "ask" for "/ask". */
+  name: string;
+  /** Argument text built from the command options; empty when there are none. */
+  text: string;
+  direct: boolean;
+  thread: boolean;
+}>;
+
 export type DiscordGatewayMessageEdited = Omit<
   DiscordGatewayMessage,
   "type" | "id" | "mentionedBot" | "replyToMessageId" | "replyToUser"
@@ -88,6 +104,7 @@ export type DiscordGatewayReaction = Readonly<{
 export type DiscordGatewayEvent =
   | DiscordGatewayMessage
   | DiscordGatewayAction
+  | DiscordGatewayCommand
   | DiscordGatewayMessageEdited
   | DiscordGatewayMessageDeleted
   | DiscordGatewayReaction;

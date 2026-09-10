@@ -21,6 +21,7 @@ export type {
   ChannelAttachment,
   ChannelAttachmentData,
   ChannelAttachmentType,
+  ChannelCommandEvent,
   ChannelOutboundAttachment,
   ChannelConversation,
   ChannelConversationKind,

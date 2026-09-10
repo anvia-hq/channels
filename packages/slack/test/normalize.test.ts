@@ -100,3 +100,43 @@ describe("normalizeSlackMessage", () => {
     expect(normalizeSlackMessage(slackMessage({ channelId: "invalid-id" }))).toBeUndefined();
   });
 });
+
+describe("normalizeSlackCommand", () => {
+  it("normalizes command socket events", () => {
+    expect(
+      normalizeSlackEvent({
+        type: "command",
+        eventId: "trigger-1",
+        teamId: "T1",
+        channelId: "D1",
+        channelType: "im",
+        senderId: "U1",
+        senderDisplayName: "indra",
+        name: "ask",
+        text: "hello",
+        botUserId: "B1",
+      }),
+    ).toEqual({
+      type: "command",
+      id: "trigger-1",
+      platform: "slack",
+      accountId: "T1",
+      conversation: { id: "D1", kind: "direct" },
+      sender: { id: "U1", displayName: "indra", bot: false },
+      name: "ask",
+      text: "hello",
+      raw: {
+        type: "command",
+        eventId: "trigger-1",
+        teamId: "T1",
+        channelId: "D1",
+        channelType: "im",
+        senderId: "U1",
+        senderDisplayName: "indra",
+        name: "ask",
+        text: "hello",
+        botUserId: "B1",
+      },
+    });
+  });
+});

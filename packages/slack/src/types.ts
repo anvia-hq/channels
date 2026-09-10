@@ -87,9 +87,26 @@ export type SlackSocketReaction = Readonly<{
   botUserId: string;
 }>;
 
+export type SlackSocketCommand = Readonly<{
+  type: "command";
+  /** Stable identifier for de-duplication; derived from the slash-command trigger ID. */
+  eventId: string;
+  teamId: string;
+  channelId: string;
+  channelType: SlackChannelType;
+  senderId: string;
+  senderDisplayName?: string;
+  /** Command name without the leading slash, for example "ask" for "/ask". */
+  name: string;
+  /** Argument text after the command name; empty when the command has no arguments. */
+  text: string;
+  botUserId: string;
+}>;
+
 export type SlackSocketEvent =
   | SlackSocketMessage
   | SlackSocketAction
+  | SlackSocketCommand
   | SlackSocketMessageEdited
   | SlackSocketMessageDeleted
   | SlackSocketReaction;

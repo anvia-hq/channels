@@ -3,6 +3,7 @@ import type { AgentContinuation, AgentInteractionResponse } from "@anvia/core/ag
 import type {
   Channel,
   ChannelActionEvent,
+  ChannelCommandEvent,
   ChannelEvent,
   ChannelMessage,
   ChannelMessageEvent,
@@ -51,6 +52,16 @@ export type ChannelAgentMultimodalOptions = Readonly<{
   maximumAttachmentBytes?: number;
   maximumTotalAttachmentBytes?: number;
   attachmentConcurrency?: number;
+}>;
+
+/**
+ * Handling for platform slash-command events (`/ask …`). When enabled, an accepted
+ * command runs the agent with the prompt `/<name> <text>`; bot-authored commands
+ * are always ignored.
+ */
+export type ChannelAgentCommandOptions<RawEvent = unknown> = Readonly<{
+  /** Decide which commands are handled; by default every user command is handled. */
+  shouldHandle?: (event: ChannelCommandEvent<RawEvent>) => boolean | Promise<boolean>;
 }>;
 
 export type ChannelAgentPromptContext<RawEvent = unknown> = Readonly<{
@@ -128,6 +139,8 @@ export type ChannelAgentOptions<RawEvent = unknown, Output = string> = Readonly<
   multimodal?: false | ChannelAgentMultimodalOptions;
   /** Shorthand for `acknowledge: { reaction }`; `false` or `undefined` disables acknowledgements. */
   acknowledge?: string | false | ChannelAgentAcknowledgementOptions;
+  /** Handle platform slash-command events; `false` (default) ignores them. */
+  commands?: boolean | ChannelAgentCommandOptions<RawEvent>;
   interactions?: false | ChannelAgentInteractionOptions<RawEvent>;
   errorMessage?: string | false;
   emptyResponseMessage?: string;

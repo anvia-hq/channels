@@ -1,5 +1,6 @@
 import type {
   ChannelActionEvent,
+  ChannelCommandEvent,
   ChannelConversation,
   ChannelConversationKind,
   ChannelEvent,
@@ -9,6 +10,7 @@ import { isChannelActionId } from "@anvia/channel";
 import { isSlackId, isSlackTimestamp } from "./identifiers.js";
 import type {
   SlackSocketAction,
+  SlackSocketCommand,
   SlackSocketEvent,
   SlackSocketMessage,
   SlackSocketMessageDeleted,
@@ -22,10 +24,27 @@ export function normalizeSlackEvent(
   event: SlackSocketEvent,
 ): ChannelEvent<SlackSocketEvent> | undefined {
   if (event.type === "action") return normalizeSlackAction(event);
+  if (event.type === "command") return normalizeSlackCommand(event);
   if (event.type === "message-edited") return normalizeSlackEdit(event);
   if (event.type === "message-deleted") return normalizeSlackDelete(event);
   if (event.type === "reaction") return normalizeSlackReaction(event);
   return normalizeSlackMessage(event);
+}
+
+export function normalizeSlackCommand(
+  command: SlackSocketCommand,
+): ChannelCommandEvent<SlackSocketEvent> {
+  return {
+    type: "command",
+    id: command.eventId,
+    platform: "slack",
+    accountId: command.teamId,
+    conversation: conversation(command.channelId, conversationKind(command.channelType), undefined),
+    sender: sender(command.senderId, false, command.senderDisplayName),
+    name: command.name,
+    text: command.text,
+    raw: command,
+  };
 }
 
 export function normalizeSlackMessage(
