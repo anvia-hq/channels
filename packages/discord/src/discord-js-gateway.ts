@@ -68,6 +68,7 @@ export class DiscordJsGateway implements DiscordGateway {
   private readonly maximumAttachmentBytes: number;
   private client: Client | undefined;
   private readonly deliveries = new Set<Promise<void>>();
+  private readonly pendingCommandReplies = new Map<string, ChatInputCommandInteraction>();
   private messageListener: ((message: Message) => void) | undefined;
   private interactionListener: ((interaction: Interaction) => void) | undefined;
   private messageUpdateListener: MessageUpdateListener | undefined;
@@ -139,10 +140,11 @@ export class DiscordJsGateway implements DiscordGateway {
           if (interaction.isChatInputCommand()) {
             const command = gatewayCommandFromDiscord(interaction, client);
             if (command === undefined) return;
-            // Acknowledge the interaction so Discord does not surface an error;
-            // the actual response is delivered as a regular channel message.
+            // Acknowledge the interaction so Discord does not surface an error,
+            // and remember it so the next send to this channel edits the deferred
+            // reply through the interaction webhook instead of posting a new message.
             await interaction.deferReply();
-            await interaction.deleteReply();
+            this.pendingCommandReplies.set(interaction.channelId, interaction);
             await handler(command);
             return;
           }
@@ -265,6 +267,16 @@ export class DiscordJsGateway implements DiscordGateway {
     channelId: string,
     message: Parameters<DiscordGateway["send"]>[1],
   ): Promise<DiscordGatewaySentMessage> {
+    const commandReply = this.pendingCommandReplies.get(channelId);
+    if (commandReply !== undefined) {
+      this.pendingCommandReplies.delete(channelId);
+      try {
+        const edited = await commandReply.editReply(interactionReplyPayload(message));
+        if (edited !== null) return { id: edited.id, channelId };
+      } catch (error) {
+        await this.reportError(error);
+      }
+    }
     const files = await discordFiles(message, this.fetch, this.maximumAttachmentBytes);
     const request: {
       body: Readonly<Record<string, unknown>>;
@@ -533,31 +545,44 @@ function gatewayUser(user: Message["author"]): DiscordGatewayUser {
   return gateway;
 }
 
+function messageComponents(message: Parameters<DiscordGateway["send"]>[1]): readonly unknown[] {
+  if (message.actions === undefined) return [];
+  return [
+    {
+      type: 1,
+      components: message.actions.map((action) => ({
+        type: 2,
+        style: action.style === "primary" ? 1 : action.style === "danger" ? 4 : 2,
+        label: action.label,
+        custom_id: action.id,
+      })),
+    },
+  ];
+}
+
 function messageBody(
   message: Parameters<DiscordGateway["send"]>[1],
 ): Readonly<Record<string, unknown>> {
   const body: Record<string, unknown> = {
     content: message.text,
     allowed_mentions: { parse: [] },
-    components: [],
+    components: messageComponents(message),
   };
   if (message.replyToMessageId !== undefined) {
     body.message_reference = { message_id: message.replyToMessageId };
   }
-  if (message.actions !== undefined) {
-    body.components = [
-      {
-        type: 1,
-        components: message.actions.map((action) => ({
-          type: 2,
-          style: action.style === "primary" ? 1 : action.style === "danger" ? 4 : 2,
-          label: action.label,
-          custom_id: action.id,
-        })),
-      },
-    ];
-  }
   return body;
+}
+
+/** camelCase payload for discord.js interaction helpers (they reject snake_case keys). */
+function interactionReplyPayload(
+  message: Parameters<DiscordGateway["send"]>[1],
+): Parameters<ChatInputCommandInteraction["editReply"]>[0] {
+  return {
+    content: message.text,
+    allowedMentions: { parse: [] },
+    components: messageComponents(message),
+  } as Parameters<ChatInputCommandInteraction["editReply"]>[0];
 }
 
 async function discordFiles(
