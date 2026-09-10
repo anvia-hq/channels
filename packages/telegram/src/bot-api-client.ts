@@ -115,6 +115,42 @@ export function createTelegramBotApiClient(options: TelegramBotApiClientOptions)
   const call = (method: string, body: object, signal?: AbortSignal) =>
     request(method, JSON.stringify(body), "application/json", signal);
 
+  const sleep = (milliseconds: number, signal?: AbortSignal): Promise<void> =>
+    new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        signal?.removeEventListener("abort", onAbort);
+        resolve();
+      }, milliseconds);
+      const onAbort = () => {
+        clearTimeout(timer);
+        reject(new TelegramApiError("request", "aborted while waiting for rate limit"));
+      };
+      signal?.addEventListener("abort", onAbort, { once: true });
+    });
+
+  // Retries rate-limited calls a bounded number of times, honouring the
+  // retry_after hint Telegram returns instead of failing the delivery.
+  const callWithRateLimitRetry = async (
+    method: string,
+    body: object,
+    signal?: AbortSignal,
+  ): Promise<unknown> => {
+    const maximumAttempts = 3;
+    for (let attempt = 1; ; attempt += 1) {
+      try {
+        return await call(method, body, signal);
+      } catch (error) {
+        const retryable =
+          error instanceof TelegramApiError &&
+          error.errorCode === 429 &&
+          attempt < maximumAttempts &&
+          signal?.aborted !== true;
+        if (!retryable) throw error;
+        await sleep(Math.max(1, error.retryAfterSeconds ?? 1) * 1000, signal);
+      }
+    }
+  };
+
   return {
     async getMe(signal) {
       return telegramUser(await call("getMe", {}, signal), "getMe result");
@@ -138,7 +174,10 @@ export function createTelegramBotApiClient(options: TelegramBotApiClientOptions)
     },
 
     async sendMessage(request, signal) {
-      return telegramMessage(await call("sendMessage", request, signal), "sendMessage result");
+      return telegramMessage(
+        await callWithRateLimitRetry("sendMessage", request, signal),
+        "sendMessage result",
+      );
     },
 
     async sendAttachment(sendRequest, signal) {
@@ -161,7 +200,7 @@ export function createTelegramBotApiClient(options: TelegramBotApiClientOptions)
       if (sendRequest.reply_markup !== undefined) common.reply_markup = sendRequest.reply_markup;
       let result: unknown;
       if (sendRequest.attachment.source.type === "url") {
-        result = await call(
+        result = await callWithRateLimitRetry(
           method,
           { ...common, [field]: sendRequest.attachment.source.url },
           signal,
@@ -188,7 +227,7 @@ export function createTelegramBotApiClient(options: TelegramBotApiClientOptions)
     },
 
     async editMessageText(request, signal) {
-      const result = await call("editMessageText", request, signal);
+      const result = await callWithRateLimitRetry("editMessageText", request, signal);
       if (result === true) return true;
       return telegramMessage(result, "editMessageText result");
     },
@@ -202,7 +241,10 @@ export function createTelegramBotApiClient(options: TelegramBotApiClientOptions)
     },
 
     async deleteMessage(request, signal) {
-      return trueResult("deleteMessage", await call("deleteMessage", request, signal));
+      return trueResult(
+        "deleteMessage",
+        await callWithRateLimitRetry("deleteMessage", request, signal),
+      );
     },
 
     async sendChatAction(request, signal) {
@@ -210,7 +252,10 @@ export function createTelegramBotApiClient(options: TelegramBotApiClientOptions)
     },
 
     async setMessageReaction(request, signal) {
-      return trueResult("setMessageReaction", await call("setMessageReaction", request, signal));
+      return trueResult(
+        "setMessageReaction",
+        await callWithRateLimitRetry("setMessageReaction", request, signal),
+      );
     },
 
     async downloadFile(fileId, signal) {

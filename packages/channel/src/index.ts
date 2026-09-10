@@ -12,6 +12,8 @@ export {
   validateChannelMessage,
   validateChannelActions,
 } from "./messages.js";
+export { createRateLimitedChannel } from "./throttle.js";
+export type { RateLimitedChannelOptions } from "./throttle.js";
 export type {
   Channel,
   ChannelAction,

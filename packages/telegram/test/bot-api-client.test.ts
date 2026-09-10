@@ -411,3 +411,62 @@ function jsonResponse(body: unknown, status = 200): Response {
     headers: { "content-type": "application/json" },
   });
 }
+
+describe("rate limit retries", () => {
+  it("retries a 429 response after retry_after and succeeds", async () => {
+    let attempts = 0;
+    const seenDelays: number[] = [];
+    const fetchImplementation = (async (
+      _url: string | URL | globalThis.Request,
+      _init?: RequestInit,
+    ) => {
+      attempts += 1;
+      if (attempts === 1) {
+        return new Response(
+          JSON.stringify({
+            ok: false,
+            error_code: 429,
+            description: "Too Many Requests",
+            parameters: { retry_after: 0 },
+          }),
+          { status: 429, headers: { "content-type": "application/json" } },
+        );
+      }
+      return new Response(
+        JSON.stringify({
+          ok: true,
+          result: { message_id: 5, date: 1, chat: { id: -100, type: "supergroup" } },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }) as typeof fetch;
+    void seenDelays;
+
+    const client = createTelegramBotApiClient({ token: "1:t", fetch: fetchImplementation });
+    const result = await client.sendMessage({ chat_id: -100, text: "hello" });
+    expect(result.message_id).toBe(5);
+    expect(attempts).toBe(2);
+  });
+
+  it("gives up after three attempts", async () => {
+    let attempts = 0;
+    const fetchImplementation = (async () => {
+      attempts += 1;
+      return new Response(
+        JSON.stringify({
+          ok: false,
+          error_code: 429,
+          description: "Too Many Requests",
+          parameters: { retry_after: 0 },
+        }),
+        { status: 429, headers: { "content-type": "application/json" } },
+      );
+    }) as typeof fetch;
+
+    const client = createTelegramBotApiClient({ token: "1:t", fetch: fetchImplementation });
+    await expect(client.sendMessage({ chat_id: -100, text: "hello" })).rejects.toThrow(
+      TelegramApiError,
+    );
+    expect(attempts).toBe(3);
+  });
+});
