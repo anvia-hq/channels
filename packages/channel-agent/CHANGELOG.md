@@ -1,5 +1,11 @@
 # @anvia/channel-agent
 
+## 0.4.1
+
+### Patch Changes
+
+- Export the `ChannelAgentCommandHandler` type from the package entrypoint so per-command handler overrides can be imported.
+
 ## 0.4.0
 
 ### Minor Changes
