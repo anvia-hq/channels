@@ -21,7 +21,7 @@
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
-    "@anvia/core": "^1.0.9",
+    "@anvia/core": "^1.5.0",
     "tsup": "catalog:",
     "typescript": "catalog:",
     "vitest": "catalog:"
