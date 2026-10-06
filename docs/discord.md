@@ -146,6 +146,24 @@ channel-agent bridge consumes that URL when building a multimodal prompt.
 Outbound attachments accept HTTPS URLs or base64 data. The combined Discord request is capped by
 `maximumAttachmentBytes`, matching the adapter's memory bound.
 
+## Slash-command replies
+
+The default `DiscordJsGateway` defers each slash command before dispatching it. The first send to
+that command's conversation, awaited within its handler, edits its deferred reply. Async context
+keeps overlapping commands and queued agent work correlated with their originating interaction.
+Further sends in the same handler are ordinary channel posts; sends to other conversations and
+independent worker sends do not consume the command reply.
+
+Await command work before returning from the handler. Unanswered deferred replies are deleted when
+the handler finishes, including ignored and failed commands. A detached task cannot send to the
+command's conversation after its handler finishes or the gateway stops. Reply errors propagate
+without a fallback channel post, avoiding duplicate delivery. Deferred replies use the same file
+conversion and size limits as ordinary sends, including attachment-only messages.
+
+These semantics belong to the default gateway; custom `DiscordGateway` implementations own their
+interaction acknowledgement and reply routing. The channel-agent bridge needs no configuration
+change beyond enabling `commands`.
+
 ## Agent integration
 
 ```ts
