@@ -16,12 +16,12 @@
     "dist"
   ],
   "scripts": {
-    "build": "tsup src/index.ts --target node24 --format esm --dts --sourcemap --clean && node scripts/fix-node-imports.mjs",
+    "build": "tsup src/index.ts --target node24 --format esm --sourcemap --clean && tsc -p tsconfig.build.json && node scripts/fix-node-imports.mjs",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
-    "@anvia/core": "^1.0.9",
+    "@anvia/core": "^1.5.0",
     "tsup": "catalog:",
     "typescript": "catalog:",
     "vitest": "catalog:"

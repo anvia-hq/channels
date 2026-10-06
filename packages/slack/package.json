@@ -16,7 +16,7 @@
     "dist"
   ],
   "scripts": {
-    "build": "tsup src/index.ts --target node24 --format esm --dts --sourcemap --clean",
+    "build": "tsup src/index.ts --target node24 --format esm --sourcemap --clean && tsc -p tsconfig.build.json",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"
   },
@@ -27,9 +27,9 @@
   },
   "dependencies": {
     "@anvia/channel": "workspace:*",
-    "@slack/socket-mode": "^3.0.0",
-    "@slack/web-api": "^8.0.0",
-    "undici": "^7.29.0"
+    "@slack/socket-mode": "^3.0.1",
+    "@slack/web-api": "^8.1.1",
+    "undici": "^7.30.0"
   },
   "repository": {
     "type": "git",
