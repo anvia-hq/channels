@@ -15,8 +15,12 @@
 Platform-neutral channel adapters for Anvia agents or ordinary application code. The workspace also
 supports proactive delivery from workers, monitors, and scheduled jobs without starting an agent.
 
-> The five libraries are currently private workspace packages while live-platform verification is
-> completed. They are not published to npm yet.
+The five libraries are published on npm and require Node.js 24 or later. Install the channel
+contract and the adapters your application uses:
+
+```sh
+pnpm add @anvia/channel @anvia/channel-agent @anvia/discord @anvia/slack @anvia/telegram
+```
 
 ## Start here
 
@@ -83,14 +87,14 @@ import { discord } from "@anvia/discord";
 
 const channel = discord({ token: process.env.DISCORD_BOT_TOKEN! });
 
-await sendChannelMessage(
+await sendChannelMessage({
   channel,
-  { platform: "discord", conversationId: process.env.DISCORD_CHANNEL_ID! },
-  {
+  address: { platform: "discord", conversationId: process.env.DISCORD_CHANNEL_ID! },
+  message: {
     text: monitoringReport,
     actions: [{ id: "incident:ack", label: "Acknowledge", style: "primary" }],
   },
-);
+});
 ```
 
 Use `sendChannelMessage()` at application boundaries because it splits long text according to the
@@ -150,9 +154,9 @@ Run the complete offline release gate with:
 pnpm verify:release
 ```
 
-Packages remain private until the credential-backed scenarios in
-[live verification](./docs/live-verification.md) pass. The offline test suite does not require live
-platform credentials or network access.
+Record credential-backed scenarios in [live verification](./docs/live-verification.md) before
+assessing a release. The offline suite does not require live platform credentials or network
+access. Packages version independently; see [release and recovery](./docs/releases.md).
 
 ## License
 
