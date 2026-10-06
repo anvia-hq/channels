@@ -1,7 +1,8 @@
 # Live adapter verification
 
-Packages stay private until this checklist passes against dedicated test bots. Never record tokens,
-webhook secrets, private file URLs, or real user payloads in fixtures or logs.
+The libraries are published on npm. Use this checklist to record release evidence against
+dedicated test bots. Never record tokens, webhook secrets, private file URLs, or real user payloads
+in fixtures or logs. Offline checks alone do not establish live-platform readiness.
 
 ## Automated gate
 
@@ -29,32 +30,30 @@ Additionally verify Telegram polling and webhook modes independently, including 
 secret header and a redelivered update. Verify Slack file uploads in both a root conversation and a
 thread. Verify Discord with Message Content Intent enabled and disabled.
 
+## Current verification record
+
+Prepared 6 October 2026 against main `29cdf7e`. The runtime fixes in the delivery-recovery PR must
+be merged and the tested revision/versions recorded before executing this matrix. No live platform
+scenario was executed for this record: dedicated test-bot credentials and destinations are not
+configured in the reviewed checkout (only `.env.example` templates are present).
+
+| Scenario                                                          | Discord | Slack   | Telegram polling | Telegram webhook |
+| ----------------------------------------------------------------- | ------- | ------- | ---------------- | ---------------- |
+| Receive, route, mentions, direct/group/thread replies             | Not run | Not run | Not run          | Not run          |
+| Commands, overlapping command replies, independent outbound sends | Not run | Not run | Not run          | Not run          |
+| Attachments, media-only output, long text, file limits            | Not run | Not run | Not run          | Not run          |
+| Streaming, edits, deletion, reactions, typing where supported     | Not run | Not run | Not run          | Not run          |
+| Actions, approvals/questions, pending interaction restart         | Not run | Not run | Not run          | Not run          |
+| Reconnect, rate limits, handler failure, duplicates, shutdown     | Not run | Not run | Not run          | Not run          |
+| Platform-specific intents, uploads, or webhook authentication     | Not run | Not run | Not run          | Not run          |
+
+For each execution, record the date, commit, installed versions, synthetic bot configuration, and
+pass/fail/blocked result. Replace Not run only with observed evidence, link failures to focused work,
+and describe omissions. Start with receive → agent → reply on each transport, then command overlap,
+attachments, and recovery. Do not send to real customer conversations.
+
 ## Publish gate
 
-### One-time trusted publishing setup
-
-1. On GitHub, under **Settings → Environments**, the `npmjs` environment has a `v*` tag policy and
-   `indrazm` as the required reviewer — a dispatch waits for that approval before publishing.
-
-2. On npmjs.com, configure a trusted publisher for each package (`@anvia/channel`,
-   `@anvia/channel-agent`, `@anvia/discord`, `@anvia/slack`, `@anvia/telegram`):
-   - Repository: `anvia-hq/channels`
-   - Workflow: `release.yml`
-   - Environment: `npmjs`
-3. Versions are already set to `0.1.0`; publishing stays blocked while packages remain `private`.
-
-### Per release
-
-After the matrix passes:
-
-1. Remove `private` only from packages intended for npm.
-2. Inspect the generated tarballs (`pnpm --filter <package> pack --dry-run`); the release workflow
-   prints them before publishing.
-3. Confirm `dist` is generated from the reviewed commit and contains no credentials or fixtures.
-4. Dispatch the release — GitHub → **Actions → Release → Run workflow** on `main`. The workflow
-   refuses a stale `main`, runs the full gate, publishes with provenance, then tags the released
-   version and creates the GitHub release. Commits and pushes made after dispatching are not
-   published.
-
-npm's CLI web-auth URLs are single-use: once an approval completes, reopening the URL returns 404.
-A clean process exit means the operation succeeded regardless of how the URL behaves afterwards.
+Use [release and recovery](./releases.md) for trusted publisher configuration, independent package
+tags, and retries after partial success. Live verification and package publication are separate
+steps; a planning review or a green offline suite does not dispatch the release workflow.
