@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import {
   Client,
   Events,
@@ -8,6 +9,9 @@ import {
   type ButtonInteraction,
   type ChatInputCommandInteraction,
   type Interaction,
+  type InteractionEditReplyOptions,
+  type APIActionRowComponent,
+  type APIButtonComponentWithCustomId,
   type Message,
   type ClientEvents,
   type MessageReaction,
@@ -49,6 +53,13 @@ type MessageDeleteListener = (...args: ClientEvents[Events.MessageDelete]) => vo
 type ReactionAddListener = (...args: ClientEvents[Events.MessageReactionAdd]) => void;
 type ReactionRemoveListener = (...args: ClientEvents[Events.MessageReactionRemove]) => void;
 
+type CommandReply = {
+  interaction: ChatInputCommandInteraction;
+  client: Client;
+  active: boolean;
+  state: "pending" | "sending" | "replied";
+};
+
 type Mutable<T> = { -readonly [Key in keyof T]: T[Key] };
 
 export type DiscordJsGatewayOptions = Readonly<{
@@ -68,7 +79,7 @@ export class DiscordJsGateway implements DiscordGateway {
   private readonly maximumAttachmentBytes: number;
   private client: Client | undefined;
   private readonly deliveries = new Set<Promise<void>>();
-  private readonly pendingCommandReplies = new Map<string, ChatInputCommandInteraction>();
+  private readonly commandReply = new AsyncLocalStorage<CommandReply>();
   private messageListener: ((message: Message) => void) | undefined;
   private interactionListener: ((interaction: Interaction) => void) | undefined;
   private messageUpdateListener: MessageUpdateListener | undefined;
@@ -140,12 +151,21 @@ export class DiscordJsGateway implements DiscordGateway {
           if (interaction.isChatInputCommand()) {
             const command = gatewayCommandFromDiscord(interaction, client);
             if (command === undefined) return;
-            // Acknowledge the interaction so Discord does not surface an error,
-            // and remember it so the next send to this channel edits the deferred
-            // reply through the interaction webhook instead of posting a new message.
             await interaction.deferReply();
-            this.pendingCommandReplies.set(interaction.channelId, interaction);
-            await handler(command);
+            const reply: CommandReply = { interaction, client, active: true, state: "pending" };
+            try {
+              // Promise continuations retain their originating command, including queued agent work.
+              await this.commandReply.run(reply, () => handler(command));
+            } finally {
+              reply.active = false;
+              if (reply.state === "pending") {
+                try {
+                  await interaction.deleteReply();
+                } catch (error) {
+                  await this.reportError(error);
+                }
+              }
+            }
             return;
           }
           if (!interaction.isButton()) return;
@@ -267,17 +287,35 @@ export class DiscordJsGateway implements DiscordGateway {
     channelId: string,
     message: Parameters<DiscordGateway["send"]>[1],
   ): Promise<DiscordGatewaySentMessage> {
-    const commandReply = this.pendingCommandReplies.get(channelId);
-    if (commandReply !== undefined) {
-      this.pendingCommandReplies.delete(channelId);
-      try {
-        const edited = await commandReply.editReply(interactionReplyPayload(message));
-        if (edited !== null) return { id: edited.id, channelId };
-      } catch (error) {
-        await this.reportError(error);
+    const reply = this.commandReply.getStore();
+    if (reply !== undefined && reply.interaction.channelId === channelId) {
+      if (!reply.active || reply.client !== this.client) {
+        throw new Error("Discord command handler is no longer active");
       }
+      if (reply.state === "sending") throw new Error("Discord command reply is already being sent");
     }
     const files = await discordFiles(message, this.fetch, this.maximumAttachmentBytes);
+    if (reply !== undefined && reply.interaction.channelId === channelId) {
+      if (!reply.active || reply.client !== this.client) {
+        throw new Error("Discord command handler is no longer active");
+      }
+      if (reply.state === "sending") throw new Error("Discord command reply is already being sent");
+      if (reply.state !== "replied") {
+        reply.state = "sending";
+        try {
+          const edited = await reply.interaction.editReply({
+            ...interactionReplyPayload(message),
+            files: files.map((file) => ({ attachment: file.data, name: file.name })),
+          });
+          if (edited === null) throw new Error("Discord command reply response is invalid");
+          reply.state = "replied";
+          return { id: edited.id, channelId };
+        } catch (error) {
+          reply.state = "pending";
+          throw error;
+        }
+      }
+    }
     const request: {
       body: Readonly<Record<string, unknown>>;
       files?: NonNullable<RestRequest["files"]>;
@@ -545,7 +583,9 @@ function gatewayUser(user: Message["author"]): DiscordGatewayUser {
   return gateway;
 }
 
-function messageComponents(message: Parameters<DiscordGateway["send"]>[1]): readonly unknown[] {
+function messageComponents(
+  message: Parameters<DiscordGateway["send"]>[1],
+): readonly APIActionRowComponent<APIButtonComponentWithCustomId>[] {
   if (message.actions === undefined) return [];
   return [
     {
@@ -577,12 +617,12 @@ function messageBody(
 /** camelCase payload for discord.js interaction helpers (they reject snake_case keys). */
 function interactionReplyPayload(
   message: Parameters<DiscordGateway["send"]>[1],
-): Parameters<ChatInputCommandInteraction["editReply"]>[0] {
+): InteractionEditReplyOptions {
   return {
     content: message.text,
     allowedMentions: { parse: [] },
     components: messageComponents(message),
-  } as Parameters<ChatInputCommandInteraction["editReply"]>[0];
+  };
 }
 
 async function discordFiles(
