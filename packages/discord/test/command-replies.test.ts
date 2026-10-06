@@ -236,6 +236,53 @@ describe("Discord deferred command replies", () => {
     expect(post).not.toHaveBeenCalled();
     expect(interaction.deleteReply).toHaveBeenCalledOnce();
   });
+
+  it.each(["success", "failure"])(
+    "waits for a concurrent initial reply %s before finishing cleanup and shutdown",
+    async (outcome) => {
+      const editing = gate();
+      const handlerFinished = gate();
+      const { gateway, client, post, onError } = await startGateway(async (event) => {
+        try {
+          await Promise.all([
+            gateway.send(event.channelId, { text: "first" }),
+            gateway.send(event.channelId, { text: "competing" }),
+          ]);
+        } finally {
+          handlerFinished.resolve();
+        }
+      });
+      const interaction = command("101");
+      interaction.editReply.mockImplementation(async () => {
+        await editing.promise;
+        if (outcome === "failure") throw new Error("late edit failure");
+        return { id: "77" };
+      });
+      client.emit(Events.InteractionCreate, interaction);
+      await handlerFinished.promise;
+      expect(interaction.editReply).toHaveBeenCalledOnce();
+      expect(interaction.deleteReply).not.toHaveBeenCalled();
+
+      let stopped = false;
+      const stopping = gateway.stop().then(() => {
+        stopped = true;
+      });
+      try {
+        // Give an incorrectly untracked delivery time to finish before releasing the edit.
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        expect(stopped).toBe(false);
+      } finally {
+        editing.resolve();
+        await stopping;
+      }
+
+      expect(interaction.deleteReply).toHaveBeenCalledTimes(outcome === "failure" ? 1 : 0);
+      expect(post).not.toHaveBeenCalled();
+      expect(onError).toHaveBeenCalledWith(
+        expect.objectContaining({ message: "Discord command reply is already being sent" }),
+      );
+    },
+  );
 });
 
 function gate() {

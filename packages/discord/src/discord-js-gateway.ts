@@ -58,6 +58,7 @@ type CommandReply = {
   client: Client;
   active: boolean;
   state: "pending" | "sending" | "replied";
+  inFlight?: Promise<DiscordGatewaySentMessage>;
 };
 
 type Mutable<T> = { -readonly [Key in keyof T]: T[Key] };
@@ -158,6 +159,8 @@ export class DiscordJsGateway implements DiscordGateway {
               await this.commandReply.run(reply, () => handler(command));
             } finally {
               reply.active = false;
+              // A competing send can reject the handler while the initial edit is still running.
+              await reply.inFlight?.catch(() => undefined);
               if (reply.state === "pending") {
                 try {
                   await interaction.deleteReply();
@@ -302,18 +305,21 @@ export class DiscordJsGateway implements DiscordGateway {
       if (reply.state === "sending") throw new Error("Discord command reply is already being sent");
       if (reply.state !== "replied") {
         reply.state = "sending";
-        try {
-          const edited = await reply.interaction.editReply({
-            ...interactionReplyPayload(message),
-            files: files.map((file) => ({ attachment: file.data, name: file.name })),
-          });
-          if (edited === null) throw new Error("Discord command reply response is invalid");
-          reply.state = "replied";
-          return { id: edited.id, channelId };
-        } catch (error) {
-          reply.state = "pending";
-          throw error;
-        }
+        reply.inFlight = (async () => {
+          try {
+            const edited = await reply.interaction.editReply({
+              ...interactionReplyPayload(message),
+              files: files.map((file) => ({ attachment: file.data, name: file.name })),
+            });
+            if (edited === null) throw new Error("Discord command reply response is invalid");
+            reply.state = "replied";
+            return { id: edited.id, channelId };
+          } catch (error) {
+            reply.state = "pending";
+            throw error;
+          }
+        })();
+        return reply.inFlight;
       }
     }
     const request: {
