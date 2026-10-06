@@ -365,6 +365,7 @@ export class TelegramChannel implements Channel<TelegramUpdate> {
 
     while (!signal.aborted) {
       let updates: readonly TelegramUpdate[];
+      let malformedOffset: number | undefined;
       try {
         const request: Mutable<TelegramGetUpdatesRequest> = {
           limit: this.polling.limit,
@@ -373,11 +374,13 @@ export class TelegramChannel implements Channel<TelegramUpdate> {
         };
         if (offset !== undefined) request.offset = offset;
         const batch = await this.api.getUpdates(request, signal);
-        updates = batch.updates;
+        updates = [...batch.updates].sort((left, right) => left.update_id - right.update_id);
         pollFailures = 0;
         for (const invalid of batch.invalid) {
           await this.reportError(invalid.error, { operation: "poll" });
-          if (invalid.updateId !== undefined) offset = nextOffset(offset, invalid.updateId);
+          if (invalid.updateId !== undefined) {
+            malformedOffset = nextOffset(malformedOffset, invalid.updateId);
+          }
         }
       } catch (error) {
         if (signal.aborted) break;
@@ -432,6 +435,10 @@ export class TelegramChannel implements Channel<TelegramUpdate> {
         }
       }
 
+      // A malformed later entry must not acknowledge an earlier failed handler.
+      if (!handlerFailed && !signal.aborted && malformedOffset !== undefined) {
+        offset = Math.max(offset ?? malformedOffset, malformedOffset);
+      }
       if (handlerFailed && !signal.aborted) {
         await abortableDelay(this.polling.retryDelayMs, signal);
       }

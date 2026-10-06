@@ -78,3 +78,7 @@ await channel.receiveWebhook(body, secret);
 
 Webhook payloads are runtime-validated before dispatch. Secret comparison is timing-safe. Do not
 configure `polling` and `webhook` together.
+
+Polling processes valid updates in update-ID order and preserves the retry checkpoint when a
+handler fails. Malformed later entries cannot advance it past that failure; their checkpoint is
+applied only after the valid batch completes.
