@@ -8,7 +8,7 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/license-MIT-89c83f?style=flat-square" alt="MIT license" />
-  <img src="https://img.shields.io/badge/TypeScript-5.9-3178c6?style=flat-square&logo=typescript&logoColor=white" alt="TypeScript 5.9" />
+  <img src="https://img.shields.io/badge/TypeScript-7.0.2-3178c6?style=flat-square&logo=typescript&logoColor=white" alt="TypeScript 7.0.2" />
   <img src="https://img.shields.io/badge/runtime-Node.js%2024-3c873a?style=flat-square&logo=node.js&logoColor=white" alt="Node.js runtime" />
 </p>
 
