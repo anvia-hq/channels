@@ -128,9 +128,10 @@ export class ChannelAgentService<RawEvent = unknown, Output = string> {
     if (controller === undefined) return;
     controller.abort();
     try {
+      // Keep delivery available until outcomes and placeholder cleanup finish.
+      await this.queue.drain();
       await this.options.channel.stop();
     } finally {
-      await this.queue.drain();
       if (this.controller === controller) this.controller = undefined;
     }
   }

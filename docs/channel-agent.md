@@ -350,5 +350,6 @@ try {
 }
 ```
 
-`stop()` aborts new work, stops the adapter, and drains queued conversations. Make shutdown
-idempotent when registering both `SIGINT` and `SIGTERM` handlers.
+`stop()` rejects new work and signals active runs to abort, then drains queued conversations before
+stopping the adapter. This keeps delivery available for completed outcomes and placeholder cleanup.
+Make shutdown idempotent when registering both `SIGINT` and `SIGTERM` handlers.

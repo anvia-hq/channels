@@ -503,10 +503,18 @@ describe("ChannelAgentService", () => {
 
     const reply = channel.emit(messageEvent({ id: "event-2", text: "approve" }));
     await vi.waitFor(() => expect(resume).toHaveBeenCalledOnce());
+    const queuedAction = channel.emit(actionEvent("queued-action"));
     const stopping = service.stop();
+    // The adapter still receives events while draining, but no new work may start.
+    await channel.emit(
+      messageEvent({ id: "event-4", conversation: { id: "chat-2", kind: "direct" } }),
+    );
+    expect(channel.stopCount).toBe(0);
     resumed.resolve(agentApproval("run-2"));
-    await Promise.all([reply, stopping]);
+    await Promise.all([reply, queuedAction, stopping]);
 
+    expect(channel.stopCount).toBe(1);
+    expect(resume).toHaveBeenCalledOnce();
     expect(store.get(channelInteractionKey(event))?.continuation.sourceRunId).toBe("run-2");
     expect(channel.sent).toHaveLength(2);
     const approve = channel.sent[1]?.message.actions?.find((action) => action.label === "Approve");
