@@ -1,5 +1,20 @@
 # @anvia/slack
 
+## 0.4.0
+
+### Minor Changes
+
+- 2994ce7: Publish Slack attachments and accompanying text or actions as one file message, cleaning up known uploads on failure. Preserve file IDs in sent message handles so deletion removes the files and message across retries and process restarts.
+
+  File-message IDs are now opaque handles rather than bare timestamps. Custom `SlackWebClient` implementations must replace `uploadFile` with `postFileMessage` and `deleteFile`; custom transports can return `SlackSentMessage.fileIds` and accept them as the optional third argument to `delete`. Outbound file messages require `files:read` as well as `files:write` to resolve the sent timestamp.
+
+### Patch Changes
+
+- 6a53d57: Refresh dependencies across the workspace and generate declarations with `tsc --emitDeclarationOnly` instead of tsup's bundled DTS step, which no longer works on TypeScript 7 (the native compiler exposes no `ts.sys`, and tsup injects the `baseUrl` option that TypeScript 7 removed). The public API surface is unchanged: every entry point still exports the same symbols. `@anvia/slack` picks up `@slack/web-api` 8.1.1, `@slack/socket-mode` 3.0.1 and `undici` 7.30.0.
+- 2af9f6f: Require HTTPS for Slack file download URLs so bot credentials are never sent over plaintext HTTP.
+- Updated dependencies [6a53d57]
+  - @anvia/channel@0.4.1
+
 ## 0.3.0
 
 ### Minor Changes
