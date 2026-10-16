@@ -92,6 +92,65 @@ describe("TelegramChannel", () => {
     await channel.stop();
   });
 
+  it("does not acknowledge a failed update when a later entry is malformed", async () => {
+    const fake = fakeApi();
+    const batch = {
+      updates: [textUpdate(10)],
+      invalid: [{ updateId: 11, error: new TypeError("malformed payload") }],
+    };
+    fake.getUpdates
+      .mockResolvedValueOnce(batch)
+      .mockResolvedValueOnce(batch)
+      .mockImplementation(waitForAbort);
+    const handler = vi
+      .fn<(event: unknown) => Promise<void>>()
+      .mockRejectedValueOnce(new Error("temporary failure"))
+      .mockResolvedValue(undefined);
+    const channel = telegram({ api: fake.api, polling: { retryDelayMs: 0 } });
+    try {
+      await channel.start(handler);
+      await vi.waitFor(() => expect(fake.getUpdates).toHaveBeenCalledTimes(3));
+      expect(handler).toHaveBeenCalledTimes(2);
+      expect(fake.getUpdates.mock.calls[1]?.[0].offset).toBeUndefined();
+      expect(fake.getUpdates.mock.calls[2]?.[0].offset).toBe(12);
+    } finally {
+      await channel.stop();
+    }
+  });
+
+  it("retries an earlier failure before acknowledging malformed or out-of-order updates", async () => {
+    const fake = fakeApi();
+    const batch = {
+      updates: [textUpdate(12), textUpdate(9), textUpdate(10)],
+      invalid: [{ updateId: 11, error: new TypeError("malformed payload") }],
+    };
+    fake.getUpdates
+      .mockResolvedValueOnce(batch)
+      .mockResolvedValueOnce(batch)
+      .mockImplementation(waitForAbort);
+    const handler = vi.fn(async (event: unknown) => {
+      if ((event as { id: string }).id === "10" && handler.mock.calls.length === 2) {
+        throw new Error("temporary failure");
+      }
+    });
+    const channel = telegram({ api: fake.api, polling: { retryDelayMs: 0 } });
+
+    try {
+      await channel.start(handler);
+      await vi.waitFor(() => expect(fake.getUpdates).toHaveBeenCalledTimes(3));
+      expect(handler.mock.calls.map(([event]) => (event as { id: string }).id)).toEqual([
+        "9",
+        "10",
+        "10",
+        "12",
+      ]);
+      expect(fake.getUpdates.mock.calls[1]?.[0].offset).toBe(10);
+      expect(fake.getUpdates.mock.calls[2]?.[0].offset).toBe(13);
+    } finally {
+      await channel.stop();
+    }
+  });
+
   it("reports a polling error and continues receiving updates", async () => {
     const pollError = new Error("temporary network error");
     const fake = fakeApi();

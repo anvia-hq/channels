@@ -55,7 +55,9 @@ await channel.start(handler);
 ```
 
 `start()` validates the token with `getMe`, then starts the background polling loop. Successfully
-handled updates advance the offset; handler failures are reported and retried.
+handled updates advance the offset; handler failures are reported and retried. Valid batch entries
+are processed in update-ID order. Malformed entries are reported and skipped only after all valid
+entries in that batch finish, so a later malformed update cannot acknowledge an earlier failure.
 
 Poll failures retry with exponential backoff: `retryDelayMs`, doubling per consecutive failure up
 to 30 seconds, resetting after a successful poll. Telegram rate limits (`429`) wait exactly the

@@ -59,3 +59,9 @@ downloaded sequentially, and `maximumAttachmentBytes` caps both each file and th
 buffered for one Discord message.
 `sendChannelMessage` splits long text into ordered messages at Discord's boundary; `channel.send`
 validates one platform-sized logical delivery and rejects oversized text.
+
+Slash commands are deferred before dispatch. The first awaited send in the command handler edits
+that command's reply, including validated files; overlapping and queued commands retain their own
+reply context. Independent sends stay ordinary posts. Await handler work: unanswered deferrals are
+cleaned up when the handler exits, and stale command tasks are rejected after exit or shutdown.
+See [slash-command reply semantics](../../docs/discord.md#slash-command-replies).
