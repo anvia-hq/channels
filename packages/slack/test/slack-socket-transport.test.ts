@@ -138,6 +138,23 @@ describe("SlackSocketTransport Web API delivery", () => {
     expect(fake.deleteMessage).toHaveBeenCalledWith("C1", "1700000001.000002");
   });
 
+  it("attempts every file and the message and reports all deletion failures", async () => {
+    const fake = fakeWebClient();
+    const transport = new SlackSocketTransport(tokens(), fake.web);
+    const first = new Error("file deletion failed");
+    const message = new Error("message deletion failed");
+    fake.deleteFile.mockRejectedValueOnce(first);
+    fake.deleteMessage.mockRejectedValueOnce(message);
+
+    await expect(
+      transport.delete("C1", "1700000001.000002", ["F1", "F2", "F3"]),
+    ).rejects.toMatchObject({
+      errors: [first, message],
+    });
+    expect(fake.deleteFile.mock.calls).toEqual([["F1"], ["F2"], ["F3"]]);
+    expect(fake.deleteMessage).toHaveBeenCalledWith("C1", "1700000001.000002");
+  });
+
   it("downloads private files with bot authentication and returns base64", async () => {
     const fetch = vi
       .fn<typeof globalThis.fetch>()

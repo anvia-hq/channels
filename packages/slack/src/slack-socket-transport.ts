@@ -178,14 +178,27 @@ export class SlackSocketTransport implements SlackTransport {
       await this.web.deleteMessage(channelId, timestamp);
       return;
     }
-    for (const fileId of fileIds) {
-      await ignoreSlackMissing(() => this.web.deleteFile(fileId), "file_not_found");
-    }
-    // Deleting the last file can remove its share message as well.
-    await ignoreSlackMissing(
-      () => this.web.deleteMessage(channelId, timestamp),
-      "message_not_found",
+    const results = await Promise.allSettled(
+      fileIds.map((fileId) =>
+        ignoreSlackMissing(() => this.web.deleteFile(fileId), "file_not_found"),
+      ),
     );
+    const failures: unknown[] = results.flatMap((result) =>
+      result.status === "rejected" ? [result.reason] : [],
+    );
+    // Deleting the last file can remove its share message as well. Always attempt
+    // message deletion, even when one or more file deletions failed.
+    try {
+      await ignoreSlackMissing(
+        () => this.web.deleteMessage(channelId, timestamp),
+        "message_not_found",
+      );
+    } catch (error) {
+      failures.push(error);
+    }
+    if (failures.length > 0) {
+      throw new AggregateError(failures, "Slack message deletion was incomplete");
+    }
   }
 
   async react(channelId: string, timestamp: string, reaction: string): Promise<void> {

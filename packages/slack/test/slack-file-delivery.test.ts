@@ -1,6 +1,6 @@
 import { WebClient } from "@slack/web-api";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { slack } from "../src/index.js";
+import { SlackFileDeliveryError, slack } from "../src/index.js";
 
 const address = { platform: "slack", conversationId: "C1" };
 const timestamp = "1700000001.000002";
@@ -11,7 +11,10 @@ const attachment = {
   source: { type: "data" as const, data: "aGk=" },
 };
 
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.useRealTimers();
+});
 
 function fixture() {
   let nextFile = 0;
@@ -89,27 +92,99 @@ describe("Slack file delivery", () => {
     expect(api).not.toHaveBeenCalledWith("chat.postMessage", expect.anything());
   });
 
-  it("rolls back all known files when completion or share lookup fails", async () => {
-    for (const failingMethod of ["files.completeUploadExternal", "files.info"]) {
+  it("retries transient share lookup failures and delayed visibility without rolling back", async () => {
+    vi.useFakeTimers();
+    const { api, channel } = fixture();
+    const normal = api.getMockImplementation()!;
+    let lookups = 0;
+    api.mockImplementation(async (method, options) => {
+      if (method === "files.info") {
+        lookups += 1;
+        if (lookups === 1) throw new Error("temporary API failure");
+        if (lookups === 2) return { ok: true, file: {} };
+      }
+      return normal(method, options);
+    });
+    const sent = channel.send(address, { text: "report", attachments: [attachment] });
+    const assertion = expect(sent).resolves.toMatchObject({ address });
+    await vi.runAllTimersAsync();
+    await assertion;
+    expect(lookups).toBe(3);
+    expect(api).not.toHaveBeenCalledWith("files.delete", expect.anything());
+    expect(api).not.toHaveBeenCalledWith("chat.delete", expect.anything());
+  });
+
+  it("recovers the share from another file when completion's response is lost", async () => {
+    const { api, channel } = fixture();
+    const normal = api.getMockImplementation()!;
+    const failure = new Error("completion response lost");
+    api.mockImplementation(async (method, options) => {
+      if (method === "files.completeUploadExternal") throw failure;
+      if (method === "files.info" && options?.file === "F1") return { ok: true, file: {} };
+      return normal(method, options);
+    });
+    await expect(
+      channel.send(address, { text: "report", attachments: [attachment, attachment] }),
+    ).rejects.toBe(failure);
+    expect(api).toHaveBeenCalledWith("files.info", { file: "F2" });
+    expect(api).toHaveBeenCalledWith("chat.delete", { channel: "C1", ts: timestamp });
+    expect(api).toHaveBeenCalledWith("files.delete", { file: "F1" });
+    expect(api).toHaveBeenCalledWith("files.delete", { file: "F2" });
+  });
+
+  it.each([false, true])(
+    "retains a cleanup path after lookup exhaustion (lost completion: %s)",
+    async (lostCompletion) => {
+      vi.useFakeTimers();
       const { api, channel } = fixture();
       const normal = api.getMockImplementation()!;
-      const failure = new Error("temporary API failure");
-      let failed = false;
       api.mockImplementation(async (method, options) => {
-        if (method === failingMethod && !failed) {
-          failed = true;
-          throw failure;
-        }
+        if (method === "files.completeUploadExternal" && lostCompletion)
+          throw new Error("response lost");
+        if (method === "files.info") throw new Error("lookup unavailable");
         return normal(method, options);
       });
-      await expect(
-        channel.send(address, { text: "report", attachments: [attachment, attachment] }),
-      ).rejects.toBe(failure);
+      const result = channel
+        .send(address, { text: "report", attachments: [attachment] })
+        .catch((error: unknown) => error);
+      await vi.runAllTimersAsync();
+      const error = await result;
+      expect(error).toBeInstanceOf(SlackFileDeliveryError);
+      expect(
+        api.mock.calls.filter(([method]) => method === "files.info").length,
+      ).toBeLessThanOrEqual(8);
+      expect(api).not.toHaveBeenCalledWith("files.delete", expect.anything());
+      expect(api).not.toHaveBeenCalledWith("chat.delete", expect.anything());
+      if (!(error instanceof SlackFileDeliveryError)) throw new Error("Expected recovery error");
+      api.mockImplementation(normal);
+      await error.retryCleanup();
+      const calls = api.mock.calls.map(([method]) => method);
+      expect(calls.indexOf("chat.delete")).toBeLessThan(calls.indexOf("files.delete"));
       expect(api).toHaveBeenCalledWith("files.delete", { file: "F1" });
-      expect(api).toHaveBeenCalledWith("files.delete", { file: "F2" });
-      expect(api).toHaveBeenCalledWith("chat.delete", { channel: "C1", ts: timestamp });
-      vi.restoreAllMocks();
-    }
+    },
+  );
+
+  it("retains the resolved timestamp when message cleanup fails and files are deleted", async () => {
+    const { api, channel } = fixture();
+    const normal = api.getMockImplementation()!;
+    api.mockImplementation(async (method, options) => {
+      if (method === "files.completeUploadExternal") throw new Error("response lost");
+      if (method === "chat.delete") throw new Error("deletion unavailable");
+      return normal(method, options);
+    });
+    const error: unknown = await channel
+      .send(address, { text: "report", attachments: [attachment] })
+      .catch((error: unknown) => error);
+    expect(api).toHaveBeenCalledWith("files.delete", { file: "F1" });
+    if (!(error instanceof SlackFileDeliveryError)) throw new Error("Expected recovery error");
+    api.mockClear();
+    api.mockImplementation(async (method, options) => {
+      if (method === "files.info" || method === "files.delete") throw missing("file_not_found");
+      return normal(method, options);
+    });
+    await error.retryCleanup();
+    expect(api).not.toHaveBeenCalledWith("files.info", expect.anything());
+    expect(api).toHaveBeenCalledWith("chat.delete", { channel: "C1", ts: timestamp });
   });
 
   it("reports cleanup failures while attempting every file", async () => {
@@ -181,6 +256,7 @@ describe("Slack file delivery", () => {
   });
 
   it("supports file-only messages and rejects invalid share responses with cleanup", async () => {
+    vi.useFakeTimers();
     const { api, channel } = fixture();
     await channel.send(address, { text: "", attachments: [attachment] });
     expect(api).toHaveBeenCalledWith(
@@ -193,7 +269,7 @@ describe("Slack file delivery", () => {
         ? { ok: true, file: { shares: { public: { C2: [{ ts: timestamp }] } } } }
         : normal(method, options),
     );
-    await expect(
+    const assertion = expect(
       channel.send(address, { text: "", attachments: [attachment] }),
     ).rejects.toMatchObject({
       message: "Slack file delivery failed and cleanup was incomplete",
@@ -202,7 +278,9 @@ describe("Slack file delivery", () => {
         expect.objectContaining({ message: "Slack uploaded file share timestamp is unavailable" }),
       ],
     });
-    expect(api).toHaveBeenCalledWith("files.delete", { file: "F2" });
+    await vi.runAllTimersAsync();
+    await assertion;
+    expect(api).not.toHaveBeenCalledWith("files.delete", { file: "F2" });
   });
 
   it.each(["file_not_found", "file_deleted"])(
@@ -228,8 +306,10 @@ describe("Slack file delivery", () => {
         if (method === "chat.delete") throw missing("message_not_found");
         return { ok: true };
       });
-      await expect(channel.delete(sent)).rejects.toThrow("try again");
-      expect(api).not.toHaveBeenCalledWith("chat.delete", expect.anything());
+      await expect(channel.delete(sent)).rejects.toMatchObject({
+        errors: [expect.objectContaining({ message: "try again" })],
+      });
+      expect(api).toHaveBeenCalledWith("chat.delete", expect.anything());
       await channel.delete(sent);
       expect([...deleted]).toEqual(["F1", "F2"]);
     },

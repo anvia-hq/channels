@@ -2,6 +2,17 @@ import type { WebClient } from "@slack/web-api";
 import { isSlackDownloadUrl, isSlackId, isSlackTimestamp } from "./identifiers.js";
 import type { SlackSentMessage } from "./types.js";
 
+/** A failed delivery with resources still requiring cleanup. Retain this error to retry in-process. */
+export class SlackFileDeliveryError extends AggregateError {
+  readonly retryCleanup: () => Promise<void>;
+
+  constructor(errors: readonly unknown[], retryCleanup: () => Promise<void>) {
+    super(errors, "Slack file delivery failed and cleanup was incomplete");
+    this.name = "SlackFileDeliveryError";
+    this.retryCleanup = retryCleanup;
+  }
+}
+
 /** Stage every file before publishing one message. Keep IDs even if completion fails. */
 export async function postSlackFiles(
   client: WebClient,
@@ -13,6 +24,35 @@ export async function postSlackFiles(
 ): Promise<SlackSentMessage> {
   const uploaded: { id: string; title: string }[] = [];
   let completionAttempted = false;
+  let timestamp: string | undefined;
+
+  const cleanup = async (): Promise<void> => {
+    const failures: unknown[] = [];
+    if (completionAttempted && uploaded.length > 0) {
+      // Do not delete files until we have retained the share timestamp: deletion
+      // can erase our only way to find a message after an uncertain completion.
+      timestamp ??= await uploadedMessageTimestamp(client, uploaded, channelId, threadTimestamp);
+      const shareTimestamp = timestamp;
+      try {
+        await ignoreSlackMissing(
+          () => client.chat.delete({ channel: channelId, ts: shareTimestamp }),
+          "message_not_found",
+        );
+      } catch (error) {
+        failures.push(error);
+      }
+    }
+    const results = await Promise.allSettled(
+      uploaded.map((file) =>
+        ignoreSlackMissing(() => client.files.delete({ file: file.id }), "file_not_found"),
+      ),
+    );
+    failures.push(
+      ...results.flatMap((result) => (result.status === "rejected" ? [result.reason] : [])),
+    );
+    if (failures.length > 0)
+      throw new AggregateError(failures, "Slack file cleanup was incomplete");
+  };
   try {
     for (const file of files) {
       const ticket = await client.files.getUploadURLExternal({
@@ -50,9 +90,7 @@ export async function postSlackFiles(
     if (result.ok !== true) throw new Error("Slack file upload completion failed");
 
     // Completion returns file IDs, not the message timestamp. Resolve the new share.
-    const first = uploaded[0];
-    if (first === undefined) throw new TypeError("Slack file message requires attachments");
-    const timestamp = await uploadedMessageTimestamp(client, first.id, channelId, threadTimestamp);
+    timestamp = await uploadedMessageTimestamp(client, uploaded, channelId, threadTimestamp);
     return {
       channelId,
       timestamp,
@@ -60,38 +98,12 @@ export async function postSlackFiles(
       ...(threadTimestamp === undefined ? {} : { threadTimestamp }),
     };
   } catch (error) {
-    const failures: unknown[] = [];
-    const first = uploaded[0];
-    if (completionAttempted && first !== undefined) {
-      try {
-        // Completion may have succeeded even when its response was lost. Resolve the
-        // share before deleting files, which can erase the timestamp we need.
-        const timestamp = await uploadedMessageTimestamp(
-          client,
-          first.id,
-          channelId,
-          threadTimestamp,
-        );
-        await ignoreSlackMissing(
-          () => client.chat.delete({ channel: channelId, ts: timestamp }),
-          "message_not_found",
-        );
-      } catch (cleanupError) {
-        failures.push(cleanupError);
-      }
-    }
-    const cleanup = await Promise.allSettled(
-      uploaded.map((file) =>
-        ignoreSlackMissing(() => client.files.delete({ file: file.id }), "file_not_found"),
-      ),
-    );
-    failures.push(
-      ...cleanup.flatMap((result) => (result.status === "rejected" ? [result.reason] : [])),
-    );
-    if (failures.length > 0) {
-      throw new AggregateError(
-        [error, ...failures],
-        "Slack file delivery failed and cleanup was incomplete",
+    try {
+      await cleanup();
+    } catch (cleanupError) {
+      throw new SlackFileDeliveryError(
+        [error, ...(cleanupError instanceof AggregateError ? cleanupError.errors : [cleanupError])],
+        cleanup,
       );
     }
     throw error;
@@ -100,20 +112,36 @@ export async function postSlackFiles(
 
 async function uploadedMessageTimestamp(
   client: WebClient,
-  fileId: string,
+  files: readonly Readonly<{ id: string }>[],
   channelId: string,
   threadTimestamp: string | undefined,
 ): Promise<string> {
-  const info = await client.files.info({ file: fileId });
-  const shares = info.file?.shares;
-  const share = [
-    ...(shares?.public?.[channelId] ?? []),
-    ...(shares?.private?.[channelId] ?? []),
-  ].find((candidate) => candidate.thread_ts === threadTimestamp && isSlackTimestamp(candidate.ts));
-  if (info.ok !== true || !isSlackTimestamp(share?.ts)) {
-    throw new TypeError("Slack uploaded file share timestamp is unavailable");
+  if (files.length === 0) throw new TypeError("Slack file message requires attachments");
+  let failure: unknown;
+  // Slack's SDK handles API rate limits; these bounded retries also cover share
+  // propagation and transient failures after the SDK's own retries are exhausted.
+  for (const delay of [0, 250, 1_000, 2_000]) {
+    if (delay > 0) await new Promise<void>((resolve) => setTimeout(resolve, delay));
+    for (const file of files) {
+      try {
+        const info = await client.files.info({ file: file.id });
+        const shares = info.file?.shares;
+        const share = [
+          ...(shares?.public?.[channelId] ?? []),
+          ...(shares?.private?.[channelId] ?? []),
+        ].find(
+          (candidate) => candidate.thread_ts === threadTimestamp && isSlackTimestamp(candidate.ts),
+        );
+        if (info.ok !== true || !isSlackTimestamp(share?.ts)) {
+          throw new TypeError("Slack uploaded file share timestamp is unavailable");
+        }
+        return share.ts;
+      } catch (error) {
+        failure = error;
+      }
+    }
   }
-  return share.ts;
+  throw failure;
 }
 
 export async function ignoreSlackMissing(

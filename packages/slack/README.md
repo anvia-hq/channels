@@ -82,7 +82,12 @@ deletions, and reaction events. Slack does not expose a general bot typing-indic
 adapter does not advertise that capability.
 `sendChannelMessage` splits long text into ordered messages at Slack's boundary; `channel.send`
 validates one platform-sized logical delivery and rejects oversized text. Failed file sends clean
-up known uploads; cleanup failures are reported in an `AggregateError`. Preserve the complete
-returned message handle: file-message IDs carry uploaded file IDs so deletion removes both files
-and text, including after a restart. Partial deletion can be retried. Network or cleanup failures
-can still leave an uncertain delivery outcome.
+up known uploads. Share lookup retries with bounded backoff and checks every uploaded file.
+If a potentially completed share cannot be located, its files are retained so later lookup remains
+possible. Incomplete cleanup throws `SlackFileDeliveryError` (an `AggregateError`); retain the error
+and call `await error.retryCleanup()` to retry cleanup in the same process before resending. This
+method retains file IDs and any resolved timestamp, but is not serializable across restarts.
+Preserve the complete returned message handle: file-message IDs carry uploaded file IDs so deletion
+removes both files and text, including after a restart. Deletion attempts every file and the message, collecting
+failures in an `AggregateError`. Partial deletion can be retried using the same handle. Network or
+cleanup failures can still leave an uncertain delivery outcome.
