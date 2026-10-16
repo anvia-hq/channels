@@ -57,6 +57,9 @@ failures remain retryable. `normalizeTelegramUpdate` returns an
 event array because one Telegram reaction update can remove and add several reactions. Ordinary
 emoji values are preserved; custom and paid reactions use `telegram:custom_emoji:<id>` and
 `telegram:paid` portable values.
+Telegram allows one bot reaction per message. `react` replaces it; `unreact` only clears a matching
+reaction tracked by this channel instance, leaving unknown or different reactions alone. See
+[removal semantics and tracking limits](../../docs/telegram.md#removing-bot-reactions).
 `sendChannelMessage` splits long text into ordered messages at Telegram's boundary; `channel.send`
 validates one platform-sized logical delivery and rejects oversized text. A message with several
 attachments uses multiple Bot API calls and may be partially delivered if an upload fails.
