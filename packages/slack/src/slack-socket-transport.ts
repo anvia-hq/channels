@@ -6,6 +6,7 @@ import type {
   ChannelMessage,
   ChannelOutboundAttachment,
 } from "@anvia/channel";
+import { ignoreSlackMissing, postSlackFiles } from "./file-delivery.js";
 import { isSlackDownloadUrl, isSlackId, isSlackTimestamp } from "./identifiers.js";
 import {
   parseSlackSocketCommand,
@@ -35,12 +36,13 @@ export type SlackWebClient = Readonly<{
   deleteMessage(channelId: string, timestamp: string): Promise<unknown>;
   addReaction(channelId: string, timestamp: string, reaction: string): Promise<unknown>;
   removeReaction(channelId: string, timestamp: string, reaction: string): Promise<unknown>;
-  uploadFile(
+  postFileMessage(
     channelId: string,
     threadTimestamp: string | undefined,
-    attachment: ChannelOutboundAttachment,
+    message: ChannelMessage,
     maximumBytes: number,
-  ): Promise<unknown>;
+  ): Promise<SlackSentMessage>;
+  deleteFile(fileId: string): Promise<unknown>;
   downloadFile(
     url: string,
     maximumBytes: number,
@@ -152,28 +154,38 @@ export class SlackSocketTransport implements SlackTransport {
     threadTimestamp: string | undefined,
     message: ChannelMessage,
   ): Promise<SlackSentMessage> {
-    const response = await this.web.postMessage(
-      channelId,
-      threadTimestamp,
-      sanitizeSlackMessage(message),
-    );
-    for (const attachment of message.attachments ?? []) {
-      await this.web.uploadFile(
+    const sanitized = sanitizeSlackMessage(message);
+    if ((message.attachments?.length ?? 0) > 0) {
+      return this.web.postFileMessage(
         channelId,
         threadTimestamp,
-        attachment,
+        sanitized,
         this.maximumAttachmentBytes,
       );
     }
-    return sentMessage(response, threadTimestamp);
+    return sentMessage(
+      await this.web.postMessage(channelId, threadTimestamp, sanitized),
+      threadTimestamp,
+    );
   }
 
   async edit(channelId: string, timestamp: string, message: ChannelMessage): Promise<void> {
     await this.web.updateMessage(channelId, timestamp, sanitizeSlackMessage(message));
   }
 
-  async delete(channelId: string, timestamp: string): Promise<void> {
-    await this.web.deleteMessage(channelId, timestamp);
+  async delete(channelId: string, timestamp: string, fileIds?: readonly string[]): Promise<void> {
+    if (fileIds === undefined || fileIds.length === 0) {
+      await this.web.deleteMessage(channelId, timestamp);
+      return;
+    }
+    for (const fileId of fileIds) {
+      await ignoreSlackMissing(() => this.web.deleteFile(fileId), "file_not_found");
+    }
+    // Deleting the last file can remove its share message as well.
+    await ignoreSlackMissing(
+      () => this.web.deleteMessage(channelId, timestamp),
+      "message_not_found",
+    );
   }
 
   async react(channelId: string, timestamp: string, reaction: string): Promise<void> {
@@ -298,17 +310,24 @@ function slackWebClient(
       client.reactions.add({ channel: channelId, timestamp, name: reaction }),
     removeReaction: (channelId, timestamp, reaction) =>
       client.reactions.remove({ channel: channelId, timestamp, name: reaction }),
-    uploadFile: async (channelId, threadTimestamp, attachment, maximumBytes) => {
-      const file = await outboundAttachmentBytes(attachment, fetchImplementation, maximumBytes);
-      const common = { file, filename: attachment.filename ?? "attachment" };
-      return threadTimestamp === undefined
-        ? client.files.uploadV2({ ...common, channel_id: channelId })
-        : client.files.uploadV2({
-            ...common,
-            channel_id: channelId,
-            thread_ts: threadTimestamp,
-          });
+    postFileMessage: async (channelId, threadTimestamp, message, maximumBytes) => {
+      const files = [];
+      for (const attachment of message.attachments ?? []) {
+        files.push({
+          file: await outboundAttachmentBytes(attachment, fetchImplementation, maximumBytes),
+          filename: attachment.filename ?? "attachment",
+        });
+      }
+      return postSlackFiles(
+        client,
+        fetchImplementation,
+        channelId,
+        threadTimestamp,
+        slackMessageBody(message),
+        files,
+      );
     },
+    deleteFile: (fileId) => client.files.delete({ file: fileId }),
     downloadFile: async (url, maximumBytes, signal) => {
       if (!isSlackDownloadUrl(url)) {
         throw new TypeError("Slack file download URL is not a Slack-controlled HTTPS URL");

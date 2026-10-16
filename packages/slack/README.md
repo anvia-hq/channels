@@ -51,8 +51,8 @@ bot token containing these scopes:
 
 Add feature-specific scopes when the application uses them:
 
-- `files:read` for incoming attachment downloads
-- `files:write` for outbound attachments
+- `files:read` for attachment downloads and outbound file-message lookup
+- `files:write` for outbound attachments and their deletion
 - `reactions:write` for outbound reactions
 - `reactions:read` for incoming `reaction_added` and `reaction_removed` events
 
@@ -74,10 +74,15 @@ Incoming images and other files are normalized and downloaded with the bot token
 application or agent loads them. The authenticated Slack URL is not exposed to the model. Downloads
 are limited to 20 MiB by default; set `maximumAttachmentBytes` to choose a different application
 limit.
-Outbound attachments are uploaded with `files.uploadV2`; replies use Slack thread timestamps.
+Outbound attachments are staged before one `files.completeUploadExternal` call publishes the
+files and accompanying text or actions. This requires `files:write` and `files:read` (to resolve the
+sent message timestamp). Replies use Slack thread timestamps.
 Reactions and message deletion use the Web API, while Socket Mode normalizes message changes,
 deletions, and reaction events. Slack does not expose a general bot typing-indicator API, so the
 adapter does not advertise that capability.
 `sendChannelMessage` splits long text into ordered messages at Slack's boundary; `channel.send`
-validates one platform-sized logical delivery and rejects oversized text. A message with several
-files uses multiple Web API calls and may be partially delivered if an upload fails.
+validates one platform-sized logical delivery and rejects oversized text. Failed file sends clean
+up known uploads; cleanup failures are reported in an `AggregateError`. Preserve the complete
+returned message handle: file-message IDs carry uploaded file IDs so deletion removes both files
+and text, including after a restart. Partial deletion can be retried. Network or cleanup failures
+can still leave an uncertain delivery outcome.

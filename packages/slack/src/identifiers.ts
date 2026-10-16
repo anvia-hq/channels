@@ -28,3 +28,15 @@ export function isSlackDownloadUrl(value: unknown): value is string {
     return false;
   }
 }
+
+/** Portable sent IDs retain file ownership across serialization and process restarts. */
+export function parseSlackMessageId(
+  value: string,
+): Readonly<{ timestamp: string; fileIds: readonly string[] }> {
+  if (typeof value !== "string") throw new TypeError("Slack message ID must be a string");
+  const [timestamp, ...fileIds] = value.split(":");
+  if (!isSlackTimestamp(timestamp) || fileIds.some((id) => !isSlackId(id) || !id.startsWith("F"))) {
+    throw new TypeError("Slack message ID must be a Slack timestamp with optional file IDs");
+  }
+  return { timestamp, fileIds };
+}

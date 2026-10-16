@@ -112,6 +112,8 @@ export type SlackSocketEvent =
   | SlackSocketReaction;
 
 export type SlackSentMessage = Readonly<{
+  /** Files owned by this delivery; pass these to transport.delete for complete cleanup. */
+  fileIds?: readonly string[];
   channelId: string;
   timestamp: string;
   threadTimestamp?: string;
@@ -128,7 +130,7 @@ export interface SlackTransport {
     message: ChannelMessage,
   ): Promise<SlackSentMessage>;
   edit(channelId: string, timestamp: string, message: ChannelMessage): Promise<void>;
-  delete(channelId: string, timestamp: string): Promise<void>;
+  delete(channelId: string, timestamp: string, fileIds?: readonly string[]): Promise<void>;
   react(channelId: string, timestamp: string, reaction: string): Promise<void>;
   removeReaction(channelId: string, timestamp: string, reaction: string): Promise<void>;
   loadAttachment(file: SlackFile, signal?: AbortSignal): Promise<ChannelAttachmentData>;
