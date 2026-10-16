@@ -21,6 +21,7 @@ export function isSlackDownloadUrl(value: unknown): value is string {
   if (typeof value !== "string" || value.length === 0) return false;
   try {
     const url = new URL(value);
+    if (url.protocol !== "https:") return false;
     return SLACK_DOWNLOAD_DOMAINS.some(
       (domain) => url.hostname === domain || url.hostname.endsWith(`.${domain}`),
     );
