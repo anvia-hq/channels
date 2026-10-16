@@ -169,6 +169,32 @@ describe("SlackSocketTransport Web API delivery", () => {
     expect(fake.downloadFile).not.toHaveBeenCalled();
   });
 
+  it.each([
+    "http://files.slack.com/file.bin",
+    "http://files.slack-files.com/file.bin",
+    "http://files.slack-gov.com/file.bin",
+    "ftp://files.slack.com/file.bin",
+    "https://evil.example/file.bin",
+    "https://files.slack.com.evil.example/file.bin",
+    "https://evilslack.com/file.bin",
+    "https://files.slack.com@evil.example/file.bin",
+  ])("rejects unsafe download URL %s before sending credentials", async (privateDownloadUrl) => {
+    const fetch = vi
+      .fn<typeof globalThis.fetch>()
+      .mockResolvedValue(new Response(new Uint8Array([1, 2, 3])));
+    const transport = new SlackSocketTransport({ ...tokens(), fetch });
+
+    await expect(
+      transport.loadAttachment({
+        id: "F1",
+        name: "file.bin",
+        mediaType: "application/octet-stream",
+        privateDownloadUrl,
+      }),
+    ).rejects.toThrow("not a Slack-controlled HTTPS URL");
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
   it("caps streamed downloads when content-length is unavailable", async () => {
     const fetch = vi
       .fn<typeof globalThis.fetch>()
