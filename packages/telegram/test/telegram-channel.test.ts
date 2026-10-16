@@ -317,6 +317,141 @@ describe("TelegramChannel", () => {
     await channel.stop();
   });
 
+  it.each([false, true])(
+    "delivers polling callbacks despite ack errors (handler retry: %s)",
+    async (retryHandler) => {
+      const update = callbackUpdate(20);
+      const ackError = new TelegramApiError("answerCallbackQuery", "query is too old", {
+        errorCode: 400,
+      });
+      const handlerError = new Error("temporary handler failure");
+      const fake = fakeApi();
+      fake.answerCallbackQuery.mockRejectedValue(ackError);
+      const batch = { updates: [update, textUpdate(21)], invalid: [] };
+      fake.getUpdates.mockResolvedValueOnce(batch);
+      const handler = vi.fn<(event: unknown) => Promise<void>>().mockResolvedValue(undefined);
+      if (retryHandler) {
+        fake.answerCallbackQuery.mockResolvedValueOnce(true);
+        handler.mockRejectedValueOnce(handlerError);
+        fake.getUpdates.mockResolvedValueOnce(batch);
+      }
+      fake.getUpdates.mockImplementation(waitForAbort);
+      const onError = vi.fn().mockRejectedValue(new Error("observer failure"));
+      const channel = telegram({ api: fake.api, polling: { retryDelayMs: 0 }, onError });
+
+      try {
+        await channel.start(handler);
+        await vi.waitFor(() => expect(fake.getUpdates).toHaveBeenCalledTimes(retryHandler ? 3 : 2));
+        const action = expect.objectContaining({ type: "action", id: "20" });
+        expect(handler.mock.calls.map(([event]) => event)).toEqual([
+          ...(retryHandler ? [action] : []),
+          action,
+          expect.objectContaining({ type: "message", id: "21" }),
+        ]);
+        expect(fake.getUpdates.mock.lastCall?.[0].offset).toBe(22);
+        expect(onError).toHaveBeenCalledWith(ackError, { operation: "handle", update });
+        if (retryHandler) {
+          expect(fake.getUpdates.mock.calls[1]?.[0].offset).toBeUndefined();
+          expect(onError).toHaveBeenCalledWith(handlerError, { operation: "handle", update });
+        }
+      } finally {
+        await channel.stop();
+      }
+    },
+  );
+
+  it.each([false, true])(
+    "delivers webhook callbacks despite ack errors (handler retry: %s)",
+    async (retryHandler) => {
+      const update = callbackUpdate(20);
+      const ackError = new TelegramApiError("answerCallbackQuery", "query is too old", {
+        errorCode: 400,
+      });
+      const handlerError = new Error("temporary handler failure");
+      const fake = fakeApi();
+      fake.answerCallbackQuery.mockRejectedValue(ackError);
+      const handler = vi.fn<(event: unknown) => Promise<void>>().mockResolvedValue(undefined);
+      if (retryHandler) {
+        fake.answerCallbackQuery.mockResolvedValueOnce(true);
+        handler.mockRejectedValueOnce(handlerError);
+      }
+      const onError = vi.fn().mockRejectedValue(new Error("observer failure"));
+      const channel = telegram({
+        api: fake.api,
+        webhook: { secretToken: "webhook_secret" },
+        onError,
+      });
+
+      try {
+        await channel.start(handler);
+        if (retryHandler) {
+          await expect(channel.receiveWebhook(update, "webhook_secret")).rejects.toBe(handlerError);
+          expect(onError).toHaveBeenCalledWith(handlerError, { operation: "handle", update });
+        }
+        await channel.receiveWebhook(update, "webhook_secret");
+        await channel.receiveWebhook(update, "webhook_secret");
+
+        expect(handler).toHaveBeenCalledTimes(retryHandler ? 2 : 1);
+        expect(handler).toHaveBeenLastCalledWith(
+          expect.objectContaining({ type: "action", id: "20" }),
+        );
+        expect(fake.answerCallbackQuery).toHaveBeenCalledTimes(retryHandler ? 2 : 1);
+        expect(onError).toHaveBeenCalledWith(ackError, { operation: "handle", update });
+      } finally {
+        await channel.stop();
+      }
+    },
+  );
+
+  it.each(["polling", "webhook"] as const)(
+    "delivers %s callbacks without waiting for the acknowledgement error observer",
+    async (transport) => {
+      const update = callbackUpdate(20);
+      const ackError = new Error("callback acknowledgement failed");
+      const fake = fakeApi();
+      fake.answerCallbackQuery.mockRejectedValue(ackError);
+      fake.getUpdates
+        .mockResolvedValueOnce({ updates: [update, textUpdate(21)], invalid: [] })
+        .mockImplementation(waitForAbort);
+      let rejectObserver: (error: Error) => void = () => undefined;
+      const observer = new Promise<void>((_resolve, reject) => {
+        rejectObserver = reject;
+      });
+      const onError = vi.fn(() => observer);
+      const handler = vi.fn(async () => undefined);
+      const channel = telegram({
+        api: fake.api,
+        ...(transport === "webhook" ? { webhook: { secretToken: "webhook_secret" } } : {}),
+        onError,
+      });
+
+      try {
+        await channel.start(handler);
+        if (transport === "webhook") {
+          const delivered = vi.fn();
+          const delivery = channel.receiveWebhook(update, "webhook_secret").then(delivered);
+          await vi.waitFor(() => expect(delivered).toHaveBeenCalledOnce());
+          await delivery;
+          await channel.receiveWebhook(update, "webhook_secret");
+          await channel.receiveWebhook(textUpdate(21), "webhook_secret");
+        } else {
+          await vi.waitFor(() => expect(fake.getUpdates).toHaveBeenCalledTimes(2));
+          expect(fake.getUpdates.mock.lastCall?.[0].offset).toBe(22);
+        }
+        expect(handler.mock.calls).toEqual([
+          [expect.objectContaining({ type: "action", id: "20" })],
+          [expect.objectContaining({ type: "message", id: "21" })],
+        ]);
+        expect(onError).toHaveBeenCalledExactlyOnceWith(ackError, { operation: "handle", update });
+        await channel.stop();
+      } finally {
+        // Reject after delivery and shutdown to also guard against unhandled rejections.
+        rejectObserver(new Error("delayed observer failure"));
+        await channel.stop();
+      }
+    },
+  );
+
   it("authenticates and dispatches webhook updates", async () => {
     const fake = fakeApi();
     const handler = vi.fn(async () => undefined);
@@ -562,6 +697,22 @@ function textUpdate(updateId: number, options: { sender?: TelegramUser } = {}): 
       },
       chat: { id: -100, type: "supergroup" },
       text: "hello",
+    },
+  };
+}
+
+function callbackUpdate(updateId: number): TelegramUpdate {
+  return {
+    update_id: updateId,
+    callback_query: {
+      id: `callback-${updateId}`,
+      from: { id: 7, is_bot: false, first_name: "Indra" },
+      data: "anvia:token:approve",
+      message: {
+        message_id: 77,
+        chat: { id: -100, type: "supergroup" },
+        text: "Approve?",
+      },
     },
   };
 }

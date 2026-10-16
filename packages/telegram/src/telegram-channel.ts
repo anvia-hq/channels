@@ -215,12 +215,7 @@ export class TelegramChannel implements Channel<TelegramUpdate> {
     bot: TelegramUser,
     controller: AbortController,
   ): Promise<void> {
-    if (update.callback_query !== undefined) {
-      await this.api.answerCallbackQuery(
-        { callback_query_id: update.callback_query.id },
-        controller.signal,
-      );
-    }
+    await this.acknowledgeCallbackQuery(update, controller.signal);
     if (controller.signal.aborted) return;
     const events = normalizeTelegramUpdate(update, bot).filter(
       (event) => !("sender" in event) || !event.sender.bot,
@@ -399,19 +394,8 @@ export class TelegramChannel implements Channel<TelegramUpdate> {
           continue;
         }
 
-        if (update.callback_query !== undefined) {
-          try {
-            await this.api.answerCallbackQuery(
-              { callback_query_id: update.callback_query.id },
-              signal,
-            );
-          } catch (error) {
-            if (signal.aborted) break;
-            await this.reportError(error, { operation: "handle", update });
-            handlerFailed = true;
-            break;
-          }
-        }
+        await this.acknowledgeCallbackQuery(update, signal);
+        if (signal.aborted) break;
         const events = normalizeTelegramUpdate(update, bot).filter(
           (event) => !("sender" in event) || !event.sender.bot,
         );
@@ -435,6 +419,19 @@ export class TelegramChannel implements Channel<TelegramUpdate> {
       if (handlerFailed && !signal.aborted) {
         await abortableDelay(this.polling.retryDelayMs, signal);
       }
+    }
+  }
+
+  private async acknowledgeCallbackQuery(
+    update: TelegramUpdate,
+    signal: AbortSignal,
+  ): Promise<void> {
+    if (update.callback_query === undefined) return;
+    try {
+      await this.api.answerCallbackQuery({ callback_query_id: update.callback_query.id }, signal);
+    } catch (error) {
+      // Error observation must not delay delivery or retries; reportError contains rejections.
+      if (!signal.aborted) void this.reportError(error, { operation: "handle", update });
     }
   }
 
