@@ -98,7 +98,7 @@ describe("SlackSocketTransport Web API delivery", () => {
     );
   });
 
-  it("uploads outbound attachments after posting the message", async () => {
+  it("sends attachments through a single file-message operation", async () => {
     const fake = fakeWebClient();
     fake.postMessage.mockResolvedValue({
       ok: true,
@@ -118,12 +118,41 @@ describe("SlackSocketTransport Web API delivery", () => {
       attachments: [attachment],
     });
 
-    expect(fake.uploadFile).toHaveBeenCalledWith(
+    expect(fake.postMessage).not.toHaveBeenCalled();
+    expect(fake.postFileMessage).toHaveBeenCalledWith(
       "C1",
       "1700000000.000001",
-      attachment,
+      { text: "report", attachments: [attachment] },
       20 * 1024 * 1024,
     );
+  });
+
+  it("deletes files together with the sent message", async () => {
+    const fake = fakeWebClient();
+    const transport = new SlackSocketTransport(tokens(), fake.web);
+
+    await transport.delete("C1", "1700000001.000002", ["F1", "F2"]);
+
+    expect(fake.deleteFile).toHaveBeenCalledWith("F1");
+    expect(fake.deleteFile).toHaveBeenCalledWith("F2");
+    expect(fake.deleteMessage).toHaveBeenCalledWith("C1", "1700000001.000002");
+  });
+
+  it("attempts every file and the message and reports all deletion failures", async () => {
+    const fake = fakeWebClient();
+    const transport = new SlackSocketTransport(tokens(), fake.web);
+    const first = new Error("file deletion failed");
+    const message = new Error("message deletion failed");
+    fake.deleteFile.mockRejectedValueOnce(first);
+    fake.deleteMessage.mockRejectedValueOnce(message);
+
+    await expect(
+      transport.delete("C1", "1700000001.000002", ["F1", "F2", "F3"]),
+    ).rejects.toMatchObject({
+      errors: [first, message],
+    });
+    expect(fake.deleteFile.mock.calls).toEqual([["F1"], ["F2"], ["F3"]]);
+    expect(fake.deleteMessage).toHaveBeenCalledWith("C1", "1700000001.000002");
   });
 
   it("downloads private files with bot authentication and returns base64", async () => {
@@ -367,7 +396,8 @@ type FakeWebClient = Readonly<{
   deleteMessage: ReturnType<typeof vi.fn<SlackWebClient["deleteMessage"]>>;
   addReaction: ReturnType<typeof vi.fn<SlackWebClient["addReaction"]>>;
   removeReaction: ReturnType<typeof vi.fn<SlackWebClient["removeReaction"]>>;
-  uploadFile: ReturnType<typeof vi.fn<SlackWebClient["uploadFile"]>>;
+  deleteFile: ReturnType<typeof vi.fn<SlackWebClient["deleteFile"]>>;
+  postFileMessage: ReturnType<typeof vi.fn<SlackWebClient["postFileMessage"]>>;
   downloadFile: ReturnType<typeof vi.fn<SlackWebClient["downloadFile"]>>;
 }>;
 
@@ -380,7 +410,10 @@ function fakeWebClient(): FakeWebClient {
   const deleteMessage = vi.fn<SlackWebClient["deleteMessage"]>().mockResolvedValue({ ok: true });
   const addReaction = vi.fn<SlackWebClient["addReaction"]>().mockResolvedValue({ ok: true });
   const removeReaction = vi.fn<SlackWebClient["removeReaction"]>().mockResolvedValue({ ok: true });
-  const uploadFile = vi.fn<SlackWebClient["uploadFile"]>().mockResolvedValue({ ok: true });
+  const deleteFile = vi.fn<SlackWebClient["deleteFile"]>().mockResolvedValue({ ok: true });
+  const postFileMessage = vi
+    .fn<SlackWebClient["postFileMessage"]>()
+    .mockResolvedValue({ channelId: "C1", timestamp: "1700000001.000002", fileIds: ["F1"] });
   const downloadFile = vi.fn<SlackWebClient["downloadFile"]>().mockResolvedValue({
     type: "data",
     data: "ZmFrZQ==",
@@ -393,7 +426,8 @@ function fakeWebClient(): FakeWebClient {
       deleteMessage,
       addReaction,
       removeReaction,
-      uploadFile,
+      postFileMessage,
+      deleteFile,
       downloadFile,
     },
     authenticate,
@@ -402,7 +436,8 @@ function fakeWebClient(): FakeWebClient {
     deleteMessage,
     addReaction,
     removeReaction,
-    uploadFile,
+    postFileMessage,
+    deleteFile,
     downloadFile,
   };
 }

@@ -9,7 +9,7 @@ import type {
   SentChannelMessage,
 } from "@anvia/channel";
 import { splitChannelMessage, validateChannelMessage } from "@anvia/channel";
-import { validateSlackId, validateSlackTimestamp } from "./identifiers.js";
+import { parseSlackMessageId, validateSlackId, validateSlackTimestamp } from "./identifiers.js";
 import { normalizeSlackEvent } from "./normalize.js";
 import { SlackSocketTransport } from "./slack-socket-transport.js";
 import type { SlackSocketEvent, SlackTransport } from "./types.js";
@@ -138,7 +138,9 @@ export class SlackChannel implements Channel<SlackSocketEvent> {
     validateMessage(message);
     const sent = await this.transport.send(
       address.conversationId,
-      message.replyToMessageId ?? address.threadId,
+      message.replyToMessageId === undefined
+        ? address.threadId
+        : parseSlackMessageId(message.replyToMessageId).timestamp,
       message,
     );
 
@@ -155,24 +157,30 @@ export class SlackChannel implements Channel<SlackSocketEvent> {
     if (sent.threadTimestamp !== undefined) sentAddress.threadId = sent.threadTimestamp;
 
     return {
-      id: sent.timestamp,
+      id: [sent.timestamp, ...(sent.fileIds ?? [])].join(":"),
       address: sentAddress,
     };
   }
 
   async edit(sent: SentChannelMessage, message: ChannelMessage): Promise<void> {
     validateAddress(sent.address);
-    validateSlackTimestamp(sent.id, "Slack message ID");
+    parseSlackMessageId(sent.id);
     validateMessage(message);
     if (message.attachments !== undefined || message.replyToMessageId !== undefined) {
       throw new TypeError("Slack message attachments and replies cannot be edited");
     }
-    await this.transport.edit(sent.address.conversationId, sent.id, message);
+    await this.transport.edit(
+      sent.address.conversationId,
+      parseSlackMessageId(sent.id).timestamp,
+      message,
+    );
   }
 
   async delete(sent: SentChannelMessage): Promise<void> {
     validateSentMessage(sent);
-    await this.transport.delete(sent.address.conversationId, sent.id);
+    const { timestamp, fileIds } = parseSlackMessageId(sent.id);
+    if (fileIds.length === 0) await this.transport.delete(sent.address.conversationId, timestamp);
+    else await this.transport.delete(sent.address.conversationId, timestamp, fileIds);
   }
 
   async react(sent: SentChannelMessage, reaction: string): Promise<void> {
@@ -180,7 +188,11 @@ export class SlackChannel implements Channel<SlackSocketEvent> {
     if (typeof reaction !== "string" || reaction.length === 0) {
       throw new TypeError("Slack reaction must not be empty");
     }
-    await this.transport.react(sent.address.conversationId, sent.id, reaction);
+    await this.transport.react(
+      sent.address.conversationId,
+      parseSlackMessageId(sent.id).timestamp,
+      reaction,
+    );
   }
 
   async unreact(sent: SentChannelMessage, reaction: string): Promise<void> {
@@ -188,7 +200,11 @@ export class SlackChannel implements Channel<SlackSocketEvent> {
     if (typeof reaction !== "string" || reaction.length === 0) {
       throw new TypeError("Slack reaction must not be empty");
     }
-    await this.transport.removeReaction(sent.address.conversationId, sent.id, reaction);
+    await this.transport.removeReaction(
+      sent.address.conversationId,
+      parseSlackMessageId(sent.id).timestamp,
+      reaction,
+    );
   }
 
   private async reportError(error: unknown, context: SlackChannelErrorContext): Promise<void> {
@@ -222,11 +238,11 @@ function validateMessage(message: ChannelMessage): void {
   }
   validateChannelMessage(message);
   if (message.replyToMessageId !== undefined) {
-    validateSlackTimestamp(message.replyToMessageId, "Slack reply message ID");
+    parseSlackMessageId(message.replyToMessageId);
   }
 }
 
 function validateSentMessage(sent: SentChannelMessage): void {
   validateAddress(sent.address);
-  validateSlackTimestamp(sent.id, "Slack message ID");
+  parseSlackMessageId(sent.id);
 }

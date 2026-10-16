@@ -159,8 +159,8 @@ Notes per platform:
   registration script). The gateway handles chat-input interactions; the reply is delivered as a
   regular channel message.
 - **Telegram**: commands (`/ask@botname`, `/ask`) are messages with a `bot_command` entity; the
-  adapter emits a `command` event for those addressed to this bot and publishes the command list
-  through BotFather or `setMyCommands`.
+  adapter emits a `command` event for those addressed to this bot. Configure the command list
+  yourself through BotFather or `setMyCommands`; the adapter does not register commands.
 
 Bot-authored commands are always ignored, and commands run through the same pipeline as messages:
 filtering, acknowledgement reactions, sessions, streaming, and interactions all apply.

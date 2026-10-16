@@ -27,7 +27,8 @@ transports and tests.
 4. Add `app_mentions:read` plus the history scopes matching received conversations. A minimal
    direct-message setup uses `im:history`; broader subscriptions use `channels:history`,
    `groups:history`, or `mpim:history` as applicable.
-5. Add `files:read` for incoming attachment downloads, `files:write` for outbound attachments, and
+5. Add `files:read` for attachment downloads and outbound file-message lookup, `files:write` for
+   outbound attachments and their deletion, and
    `reactions:write` for `channel.react()`. To receive reaction lifecycle events, also add
    `reactions:read` and subscribe to `reaction_added` and `reaction_removed`.
 6. Subscribe to `app_mention` and `message.im` for mention-driven channels and direct messages.
@@ -83,8 +84,16 @@ await sendChannelMessage({
 });
 ```
 
-Text is posted first and files are uploaded sequentially with `files.uploadV2`. A multi-file
-delivery may be partially visible if a later upload fails; use idempotent application retries.
+The transport prepares all attachments, stages the uploads, then publishes the files and text (or
+Block Kit actions) together with one `files.completeUploadExternal` call. A failed preparation or
+upload does not leave a separate text post for a retry to duplicate. Known uploads are cleaned up
+on failure; a cleanup failure is reported with the original error in an `AggregateError`.
+
+Keep the complete returned `SentChannelMessage`, including its opaque `id`. For file messages the
+ID includes the Slack timestamp and uploaded file IDs, so `channel.delete(sent)` removes both the
+files and the message even after serialization or a process restart. Deletion can be retried after
+partial cleanup. As with other Slack API operations, network failures and failed cleanup can leave
+an uncertain delivery outcome; this is not an exactly-once guarantee across API failures.
 
 ## Receive normalized events
 
@@ -120,7 +129,9 @@ if (event.conversation.threadId !== undefined) {
 await channel.send(address, { text: "Following up in this thread." });
 ```
 
-Message IDs and thread IDs are Slack timestamps such as `1712345678.123456`, not arbitrary UUIDs.
+Thread IDs are Slack timestamps such as `1712345678.123456`. Text-only message IDs are timestamps;
+file-message IDs also carry file IDs. Pass the full returned ID to `replyToMessageId` and preserve
+it for edits, reactions, and deletion.
 
 ## Attachments and generated text
 
@@ -161,7 +172,10 @@ const channel = new SlackChannel({ transport: existingSlackTransport });
 ```
 
 The transport must parse and validate external payloads before emitting `SlackSocketEvent`,
-acknowledge Slack envelopes promptly, and drain active handlers during shutdown.
+acknowledge Slack envelopes promptly, and drain active handlers during shutdown. A file delivery
+returns `SlackSentMessage.fileIds`; callers using the transport directly must pass these as the
+third argument to `transport.delete(channelId, timestamp, fileIds)`. Injected `SlackWebClient`
+implementations provide `postFileMessage` for a complete file delivery and `deleteFile` for cleanup.
 
 ## Shutdown
 

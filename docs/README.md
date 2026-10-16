@@ -97,6 +97,5 @@ adapter lifecycle.
 
 ## Package status
 
-The package names in these guides are the intended installation names. This repository currently
-keeps them private until the live-platform matrix passes. Within this pnpm workspace, examples use
-the same names through workspace dependencies.
+The packages in these guides are published publicly under the listed `@anvia/*` installation
+names. Within this pnpm workspace, examples use the same names through workspace dependencies.

@@ -1,3 +1,4 @@
+export { SlackFileDeliveryError } from "./file-delivery.js";
 export {
   isSlackId,
   isSlackTimestamp,
