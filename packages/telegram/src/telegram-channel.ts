@@ -430,8 +430,8 @@ export class TelegramChannel implements Channel<TelegramUpdate> {
     try {
       await this.api.answerCallbackQuery({ callback_query_id: update.callback_query.id }, signal);
     } catch (error) {
-      // Expired or already answered callbacks must not prevent handler delivery or retries.
-      if (!signal.aborted) await this.reportError(error, { operation: "handle", update });
+      // Error observation must not delay delivery or retries; reportError contains rejections.
+      if (!signal.aborted) void this.reportError(error, { operation: "handle", update });
     }
   }
 

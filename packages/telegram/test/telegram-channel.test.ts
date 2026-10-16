@@ -403,6 +403,55 @@ describe("TelegramChannel", () => {
     },
   );
 
+  it.each(["polling", "webhook"] as const)(
+    "delivers %s callbacks without waiting for the acknowledgement error observer",
+    async (transport) => {
+      const update = callbackUpdate(20);
+      const ackError = new Error("callback acknowledgement failed");
+      const fake = fakeApi();
+      fake.answerCallbackQuery.mockRejectedValue(ackError);
+      fake.getUpdates
+        .mockResolvedValueOnce({ updates: [update, textUpdate(21)], invalid: [] })
+        .mockImplementation(waitForAbort);
+      let rejectObserver: (error: Error) => void = () => undefined;
+      const observer = new Promise<void>((_resolve, reject) => {
+        rejectObserver = reject;
+      });
+      const onError = vi.fn(() => observer);
+      const handler = vi.fn(async () => undefined);
+      const channel = telegram({
+        api: fake.api,
+        ...(transport === "webhook" ? { webhook: { secretToken: "webhook_secret" } } : {}),
+        onError,
+      });
+
+      try {
+        await channel.start(handler);
+        if (transport === "webhook") {
+          const delivered = vi.fn();
+          const delivery = channel.receiveWebhook(update, "webhook_secret").then(delivered);
+          await vi.waitFor(() => expect(delivered).toHaveBeenCalledOnce());
+          await delivery;
+          await channel.receiveWebhook(update, "webhook_secret");
+          await channel.receiveWebhook(textUpdate(21), "webhook_secret");
+        } else {
+          await vi.waitFor(() => expect(fake.getUpdates).toHaveBeenCalledTimes(2));
+          expect(fake.getUpdates.mock.lastCall?.[0].offset).toBe(22);
+        }
+        expect(handler.mock.calls).toEqual([
+          [expect.objectContaining({ type: "action", id: "20" })],
+          [expect.objectContaining({ type: "message", id: "21" })],
+        ]);
+        expect(onError).toHaveBeenCalledExactlyOnceWith(ackError, { operation: "handle", update });
+        await channel.stop();
+      } finally {
+        // Reject after delivery and shutdown to also guard against unhandled rejections.
+        rejectObserver(new Error("delayed observer failure"));
+        await channel.stop();
+      }
+    },
+  );
+
   it("authenticates and dispatches webhook updates", async () => {
     const fake = fakeApi();
     const handler = vi.fn(async () => undefined);
