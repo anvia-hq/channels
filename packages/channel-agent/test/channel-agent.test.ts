@@ -477,7 +477,7 @@ describe("ChannelAgentService", () => {
     await service.stop();
   });
 
-  it("persists a resumed follow-up interaction when shutdown races with resume", async () => {
+  it("delivers and persists a resumed follow-up interaction when shutdown races with resume", async () => {
     const channel = new FakeChannel();
     const store = new MemoryChannelAgentInteractionStore();
     const resumed = deferred<AgentOutcome<string>>();
@@ -508,7 +508,112 @@ describe("ChannelAgentService", () => {
     await Promise.all([reply, stopping]);
 
     expect(store.get(channelInteractionKey(event))?.continuation.sourceRunId).toBe("run-2");
+    expect(channel.sent).toHaveLength(2);
+    const approve = channel.sent[1]?.message.actions?.find((action) => action.label === "Approve");
+    if (approve === undefined) throw new Error("Expected a delivered follow-up approval action");
+
+    await service.start();
+    resume.mockResolvedValue(agentResponse("Done."));
+    await channel.emit(actionEvent(approve.id));
+    expect(resume).toHaveBeenLastCalledWith(
+      expect.objectContaining({ sourceRunId: "run-2" }),
+      { type: "tool-approval", approved: true },
+      { abortSignal: expect.any(AbortSignal) },
+    );
+    expect(store.get(channelInteractionKey(event))).toBeUndefined();
+    await service.stop();
   });
+
+  it.each(["reply", "action"])(
+    "delivers a completed approval result when shutdown races with a %s resume",
+    async (responseType) => {
+      const channel = new FakeChannel();
+      const store = new MemoryChannelAgentInteractionStore();
+      const resumed = deferred<AgentOutcome<string>>();
+      const resume = vi
+        .fn<NonNullable<ChannelAgentExecutor["resume"]>>()
+        .mockReturnValue(resumed.promise);
+      const service = await serveChannelAgent({
+        channel,
+        agent: {
+          ...fakeAgent({
+            generate: vi.fn<ChannelAgentExecutor["generate"]>().mockResolvedValue(agentApproval()),
+            streaming: false,
+          }),
+          resume,
+        },
+        interactions: { store },
+      });
+      const event = messageEvent();
+      await channel.emit(event);
+      const approve = channel.edits[0]?.message.actions?.find(
+        (action) => action.label === "Approve",
+      );
+      if (approve === undefined) throw new Error("Expected an approval action");
+
+      const reply = channel.emit(
+        responseType === "action"
+          ? actionEvent(approve.id)
+          : messageEvent({ id: "event-2", text: "approve" }),
+      );
+      await vi.waitFor(() => expect(resume).toHaveBeenCalledOnce());
+      const stopping = service.stop();
+      resumed.resolve(agentResponse("Email sent."));
+      await Promise.all([reply, stopping]);
+
+      expect(channel.edits.at(-1)?.message.text).toBe("Email sent.");
+      expect(channel.deleted).toEqual([]);
+      expect(store.get(channelInteractionKey(event))).toBeUndefined();
+      expect(resume).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each([false, true])(
+    "keeps interaction state consistent with delivery when shutdown races with rendering (delivery fails: %s)",
+    async (deliveryFails) => {
+      const channel = new FakeChannel();
+      const store = new MemoryChannelAgentInteractionStore();
+      const rendered = deferred<string>();
+      const render = vi.fn(() => rendered.promise);
+      const generate = vi.fn<ChannelAgentExecutor["generate"]>().mockResolvedValue(agentApproval());
+      const resume = vi
+        .fn<NonNullable<ChannelAgentExecutor["resume"]>>()
+        .mockResolvedValue(agentResponse("Done."));
+      const onError = vi.fn();
+      const service = await serveChannelAgent({
+        channel,
+        agent: { ...fakeAgent({ generate, streaming: false }), resume },
+        interactions: { store, render },
+        streaming: { placeholder: false },
+        onError,
+      });
+      const event = messageEvent();
+      const run = channel.emit(event);
+      await vi.waitFor(() => expect(render).toHaveBeenCalledOnce());
+      const stopping = service.stop();
+      if (deliveryFails) vi.spyOn(channel, "send").mockRejectedValueOnce(new Error("send failed"));
+      rendered.resolve("Approve sending the email?");
+      await Promise.all([run, stopping]);
+
+      if (deliveryFails) {
+        expect(channel.sent).toEqual([]);
+        expect(store.get(channelInteractionKey(event))).toBeUndefined();
+        expect(onError).toHaveBeenCalledWith(
+          expect.any(Error),
+          expect.objectContaining({ stage: "delivery" }),
+        );
+      } else {
+        expect(channel.sent[0]?.message.text).toBe("Approve sending the email?");
+        expect(store.get(channelInteractionKey(event))).toBeDefined();
+      }
+
+      await service.start();
+      await channel.emit(messageEvent({ id: "event-2", text: "approve" }));
+      expect(generate).toHaveBeenCalledTimes(deliveryFails ? 2 : 1);
+      expect(resume).toHaveBeenCalledTimes(deliveryFails ? 0 : 1);
+      await service.stop();
+    },
+  );
 
   it("filters unmentioned group messages by default", async () => {
     const channel = new FakeChannel();

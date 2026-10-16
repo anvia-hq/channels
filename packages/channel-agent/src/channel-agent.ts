@@ -420,10 +420,8 @@ export class ChannelAgentService<RawEvent = unknown, Output = string> {
       return;
     }
 
-    if (signal.aborted) {
-      await this.cleanupPlaceholder(provisional);
-      return;
-    }
+    // Once an outcome is being finalized, shutdown must drain its delivery too.
+    // In particular, a stored interaction must have a prompt the user can answer.
     try {
       await this.deliver(eventAddress(event), provisional, response, deliveredText);
     } catch (error) {
@@ -580,10 +578,8 @@ export class ChannelAgentService<RawEvent = unknown, Output = string> {
       await this.handleFailure(error, "agent", event, provisional, signal);
       return;
     }
-    if (signal.aborted && outcome.type !== "interaction") {
-      await this.cleanupPlaceholder(provisional);
-      return;
-    }
+    // The response has been consumed. Deliver the resulting outcome even if the
+    // executor finished successfully after shutdown requested an abort.
     await this.completeOutcome(outcome, event, provisional, signal);
   }
 

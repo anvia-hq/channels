@@ -332,7 +332,10 @@ Pending interactions can expire, be cancelled, and fail safely:
 - If rendering or delivering an interaction prompt fails, the pending interaction is rolled back so
   a prompt the user never saw can never be resumed by a later reply.
 - On shutdown, an already-sent streaming placeholder is deleted (or replaced with a short
-  "(interrupted)" note) instead of being left dangling.
+  "(interrupted)" note) if the run is interrupted. A successful interaction resume still delivers
+  its result or follow-up prompt while shutdown drains the queue. Once outcome rendering has
+  started, delivery also finishes during shutdown; a follow-up prompt that fails delivery is
+  removed from the interaction store.
 
 ## Graceful shutdown
 
