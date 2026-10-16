@@ -317,6 +317,92 @@ describe("TelegramChannel", () => {
     await channel.stop();
   });
 
+  it.each([false, true])(
+    "delivers polling callbacks despite ack errors (handler retry: %s)",
+    async (retryHandler) => {
+      const update = callbackUpdate(20);
+      const ackError = new TelegramApiError("answerCallbackQuery", "query is too old", {
+        errorCode: 400,
+      });
+      const handlerError = new Error("temporary handler failure");
+      const fake = fakeApi();
+      fake.answerCallbackQuery.mockRejectedValue(ackError);
+      const batch = { updates: [update, textUpdate(21)], invalid: [] };
+      fake.getUpdates.mockResolvedValueOnce(batch);
+      const handler = vi.fn<(event: unknown) => Promise<void>>().mockResolvedValue(undefined);
+      if (retryHandler) {
+        fake.answerCallbackQuery.mockResolvedValueOnce(true);
+        handler.mockRejectedValueOnce(handlerError);
+        fake.getUpdates.mockResolvedValueOnce(batch);
+      }
+      fake.getUpdates.mockImplementation(waitForAbort);
+      const onError = vi.fn().mockRejectedValue(new Error("observer failure"));
+      const channel = telegram({ api: fake.api, polling: { retryDelayMs: 0 }, onError });
+
+      try {
+        await channel.start(handler);
+        await vi.waitFor(() => expect(fake.getUpdates).toHaveBeenCalledTimes(retryHandler ? 3 : 2));
+        const action = expect.objectContaining({ type: "action", id: "20" });
+        expect(handler.mock.calls.map(([event]) => event)).toEqual([
+          ...(retryHandler ? [action] : []),
+          action,
+          expect.objectContaining({ type: "message", id: "21" }),
+        ]);
+        expect(fake.getUpdates.mock.lastCall?.[0].offset).toBe(22);
+        expect(onError).toHaveBeenCalledWith(ackError, { operation: "handle", update });
+        if (retryHandler) {
+          expect(fake.getUpdates.mock.calls[1]?.[0].offset).toBeUndefined();
+          expect(onError).toHaveBeenCalledWith(handlerError, { operation: "handle", update });
+        }
+      } finally {
+        await channel.stop();
+      }
+    },
+  );
+
+  it.each([false, true])(
+    "delivers webhook callbacks despite ack errors (handler retry: %s)",
+    async (retryHandler) => {
+      const update = callbackUpdate(20);
+      const ackError = new TelegramApiError("answerCallbackQuery", "query is too old", {
+        errorCode: 400,
+      });
+      const handlerError = new Error("temporary handler failure");
+      const fake = fakeApi();
+      fake.answerCallbackQuery.mockRejectedValue(ackError);
+      const handler = vi.fn<(event: unknown) => Promise<void>>().mockResolvedValue(undefined);
+      if (retryHandler) {
+        fake.answerCallbackQuery.mockResolvedValueOnce(true);
+        handler.mockRejectedValueOnce(handlerError);
+      }
+      const onError = vi.fn().mockRejectedValue(new Error("observer failure"));
+      const channel = telegram({
+        api: fake.api,
+        webhook: { secretToken: "webhook_secret" },
+        onError,
+      });
+
+      try {
+        await channel.start(handler);
+        if (retryHandler) {
+          await expect(channel.receiveWebhook(update, "webhook_secret")).rejects.toBe(handlerError);
+          expect(onError).toHaveBeenCalledWith(handlerError, { operation: "handle", update });
+        }
+        await channel.receiveWebhook(update, "webhook_secret");
+        await channel.receiveWebhook(update, "webhook_secret");
+
+        expect(handler).toHaveBeenCalledTimes(retryHandler ? 2 : 1);
+        expect(handler).toHaveBeenLastCalledWith(
+          expect.objectContaining({ type: "action", id: "20" }),
+        );
+        expect(fake.answerCallbackQuery).toHaveBeenCalledTimes(retryHandler ? 2 : 1);
+        expect(onError).toHaveBeenCalledWith(ackError, { operation: "handle", update });
+      } finally {
+        await channel.stop();
+      }
+    },
+  );
+
   it("authenticates and dispatches webhook updates", async () => {
     const fake = fakeApi();
     const handler = vi.fn(async () => undefined);
@@ -562,6 +648,22 @@ function textUpdate(updateId: number, options: { sender?: TelegramUser } = {}): 
       },
       chat: { id: -100, type: "supergroup" },
       text: "hello",
+    },
+  };
+}
+
+function callbackUpdate(updateId: number): TelegramUpdate {
+  return {
+    update_id: updateId,
+    callback_query: {
+      id: `callback-${updateId}`,
+      from: { id: 7, is_bot: false, first_name: "Indra" },
+      data: "anvia:token:approve",
+      message: {
+        message_id: 77,
+        chat: { id: -100, type: "supergroup" },
+        text: "Approve?",
+      },
     },
   };
 }

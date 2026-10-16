@@ -49,8 +49,10 @@ the attachment; the token-bearing Telegram download URL is never exposed to the 
 are stream-capped to 20 MiB by default; set `maximumAttachmentBytes` on `telegram(...)` to choose a
 different application limit. Messages sent by bots and unsupported updates are acknowledged
 without invoking the handler.
-Portable message actions are rendered as inline keyboards. Callback queries are acknowledged
-before application processing and normalized as action events. `normalizeTelegramUpdate` returns an
+Portable message actions are rendered as inline keyboards. Callback query acknowledgement is attempted
+before application processing, and callbacks are normalized as action events. In both polling and
+webhook modes, acknowledgement failures are reported through `onError` with operation `handle`
+without blocking delivery; handler failures remain retryable. `normalizeTelegramUpdate` returns an
 event array because one Telegram reaction update can remove and add several reactions. Ordinary
 emoji values are preserved; custom and paid reactions use `telegram:custom_emoji:<id>` and
 `telegram:paid` portable values.
