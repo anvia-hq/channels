@@ -439,6 +439,137 @@ describe("TelegramChannel", () => {
     expect(fake.deleteMessage).toHaveBeenCalledWith({ chat_id: -100, message_id: 77 });
   });
 
+  describe("reaction removal", () => {
+    const sent = { id: "77", address: { platform: "telegram", conversationId: "-100" } };
+
+    it("preserves a replacement reaction when removing an acknowledgement", async () => {
+      const fake = fakeApi();
+      const channel = telegram({ api: fake.api });
+
+      await channel.react(sent, "👀");
+      await channel.react(sent, "👍");
+      await channel.unreact(sent, "👀");
+
+      expect(fake.setMessageReaction).toHaveBeenCalledTimes(2);
+      expect(fake.setMessageReaction).toHaveBeenLastCalledWith({
+        chat_id: -100,
+        message_id: 77,
+        reaction: [{ type: "emoji", emoji: "👍" }],
+      });
+      await channel.unreact(sent, "👍");
+      expect(fake.setMessageReaction).toHaveBeenLastCalledWith({
+        chat_id: -100,
+        message_id: 77,
+        reaction: [],
+      });
+      await channel.unreact(sent, "👍");
+      expect(fake.setMessageReaction).toHaveBeenCalledTimes(3);
+    });
+
+    it("leaves unknown reactions alone and isolates chats, messages, and instances", async () => {
+      const fake = fakeApi();
+      const channel = telegram({ api: fake.api });
+      await channel.unreact(sent, "👀");
+      expect(fake.setMessageReaction).not.toHaveBeenCalled();
+
+      await channel.react(sent, "👀");
+      await channel.unreact({ ...sent, id: "78" }, "👀");
+      await channel.unreact(
+        { ...sent, address: { ...sent.address, conversationId: "-200" } },
+        "👀",
+      );
+      await telegram({ api: fake.api }).unreact(sent, "👀");
+      expect(fake.setMessageReaction).toHaveBeenCalledOnce();
+
+      // Topics do not change a message's identity within its chat.
+      await channel.unreact({ ...sent, address: { ...sent.address, threadId: "5" } }, "👀");
+      expect(fake.setMessageReaction).toHaveBeenCalledTimes(2);
+      expect(fake.setMessageReaction).toHaveBeenLastCalledWith({
+        chat_id: -100,
+        message_id: 77,
+        reaction: [],
+      });
+    });
+
+    it("orders overlapping reaction changes on the same message", async () => {
+      const fake = fakeApi();
+      const channel = telegram({ api: fake.api });
+      let finishFirst = () => {};
+      fake.setMessageReaction.mockImplementationOnce(
+        () =>
+          new Promise<true>((resolve) => {
+            finishFirst = () => resolve(true);
+          }),
+      );
+
+      const first = channel.react(sent, "👀");
+      const second = channel.react(sent, "👍");
+      const removal = channel.unreact(sent, "👀");
+      await vi.waitFor(() => expect(fake.setMessageReaction).toHaveBeenCalledOnce());
+      // A blocked message must not block another message's reaction.
+      await channel.react({ ...sent, id: "78" }, "❤️");
+      expect(fake.setMessageReaction).toHaveBeenCalledTimes(2);
+      finishFirst();
+      await Promise.all([first, second, removal]);
+
+      expect(fake.setMessageReaction.mock.calls.map(([request]) => request)).toEqual([
+        { chat_id: -100, message_id: 77, reaction: [{ type: "emoji", emoji: "👀" }] },
+        { chat_id: -100, message_id: 78, reaction: [{ type: "emoji", emoji: "❤️" }] },
+        { chat_id: -100, message_id: 77, reaction: [{ type: "emoji", emoji: "👍" }] },
+      ]);
+      await channel.unreact(sent, "👍");
+      expect(fake.setMessageReaction).toHaveBeenLastCalledWith({
+        chat_id: -100,
+        message_id: 77,
+        reaction: [],
+      });
+    });
+
+    it("forgets uncertain state after a failed write and allows queued writes to recover", async () => {
+      const fake = fakeApi();
+      const channel = telegram({ api: fake.api });
+      await channel.react(sent, "👀");
+      fake.setMessageReaction.mockRejectedValueOnce(new Error("response lost"));
+      const failed = channel.react(sent, "👍");
+      const removal = channel.unreact(sent, "👀");
+      await expect(failed).rejects.toThrow("response lost");
+      await removal;
+      expect(fake.setMessageReaction).toHaveBeenCalledTimes(2);
+
+      await channel.react(sent, "❤️");
+      await channel.unreact(sent, "❤️");
+      expect(fake.setMessageReaction).toHaveBeenCalledTimes(4);
+      expect(fake.setMessageReaction).toHaveBeenLastCalledWith({
+        chat_id: -100,
+        message_id: 77,
+        reaction: [],
+      });
+    });
+
+    it("leaves evicted reactions alone", async () => {
+      const fake = fakeApi();
+      const channel = telegram({ api: fake.api });
+      for (let id = 1; id <= 1_001; id++) {
+        await channel.react({ ...sent, id: String(id) }, "👀");
+      }
+      await channel.unreact({ ...sent, id: "1" }, "👀");
+      expect(fake.setMessageReaction).toHaveBeenCalledTimes(1_001);
+      await channel.unreact({ ...sent, id: "1001" }, "👀");
+      expect(fake.setMessageReaction).toHaveBeenCalledTimes(1_002);
+    });
+
+    it("validates removal requests even when no reaction is known", async () => {
+      const fake = fakeApi();
+      const channel = telegram({ api: fake.api });
+      await expect(channel.unreact(sent, "")).rejects.toThrow("must not be empty");
+      await expect(channel.unreact({ ...sent, id: "invalid" }, "👀")).rejects.toThrow();
+      await expect(
+        channel.unreact({ ...sent, address: { ...sent.address, platform: "slack" } }, "👀"),
+      ).rejects.toThrow("cannot use a slack address");
+      expect(fake.setMessageReaction).not.toHaveBeenCalled();
+    });
+  });
+
   it("loads Telegram media through the authenticated Bot API", async () => {
     const fake = fakeApi();
     const channel = telegram({ api: fake.api });

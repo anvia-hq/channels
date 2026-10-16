@@ -30,6 +30,7 @@ const DEFAULT_RETRY_DELAY_MS = 1_000;
 const DEFAULT_POLL_LIMIT = 100;
 const MAX_MESSAGE_LENGTH = 4_096;
 const MAX_REMEMBERED_UPDATES = 1_000;
+const MAX_REMEMBERED_REACTIONS = 1_000;
 
 type Mutable<T> = { -readonly [Key in keyof T]: T[Key] };
 
@@ -102,6 +103,8 @@ export class TelegramChannel implements Channel<TelegramUpdate> {
   private bot: TelegramUser | undefined;
   private readonly handledWebhookUpdates = new Set<number>();
   private readonly webhookDeliveries = new Map<number, Promise<void>>();
+  private readonly reactions = new Map<string, string>();
+  private readonly reactionWrites = new Map<string, Promise<void>>();
 
   constructor(options: TelegramChannelOptions) {
     if (options.webhook !== undefined && options.polling !== undefined) {
@@ -330,28 +333,60 @@ export class TelegramChannel implements Channel<TelegramUpdate> {
   }
 
   async react(sent: SentChannelMessage, reaction: string): Promise<void> {
-    validateSentMessage(sent);
-    if (typeof reaction !== "string" || reaction.length === 0) {
-      throw new TypeError("Telegram reaction must not be empty");
-    }
-    await this.api.setMessageReaction({
-      chat_id: chatId(sent.address.conversationId),
-      message_id: positiveInteger(sent.id, "Telegram message ID"),
-      reaction: [{ type: "emoji", emoji: reaction }],
-    });
+    await this.updateReaction(sent, reaction, false);
   }
 
   async unreact(sent: SentChannelMessage, reaction: string): Promise<void> {
+    await this.updateReaction(sent, reaction, true);
+  }
+
+  private async updateReaction(
+    sent: SentChannelMessage,
+    reaction: string,
+    remove: boolean,
+  ): Promise<void> {
     validateSentMessage(sent);
     if (typeof reaction !== "string" || reaction.length === 0) {
       throw new TypeError("Telegram reaction must not be empty");
     }
-    // An empty reaction list removes the reactions added by this bot.
-    await this.api.setMessageReaction({
-      chat_id: chatId(sent.address.conversationId),
-      message_id: positiveInteger(sent.id, "Telegram message ID"),
-      reaction: [],
+    const target = chatId(sent.address.conversationId);
+    const messageId = positiveInteger(sent.id, "Telegram message ID");
+    const key = JSON.stringify([
+      typeof target === "string" ? target.toLowerCase() : target,
+      messageId,
+    ]);
+    const previous = this.reactionWrites.get(key) ?? Promise.resolve();
+    // Serialize the check and write: Telegram replaces the bot's single reaction.
+    const write = previous.then(async () => {
+      if (remove && this.reactions.get(key) !== reaction) return;
+      try {
+        await this.api.setMessageReaction({
+          chat_id: target,
+          message_id: messageId,
+          reaction: remove ? [] : [{ type: "emoji", emoji: reaction }],
+        });
+      } catch (error) {
+        // A lost response can leave remote state different from our last success.
+        this.reactions.delete(key);
+        throw error;
+      }
+      this.reactions.delete(key);
+      if (!remove) {
+        this.reactions.set(key, reaction);
+        if (this.reactions.size > MAX_REMEMBERED_REACTIONS) {
+          const oldest = this.reactions.keys().next().value;
+          if (oldest !== undefined) this.reactions.delete(oldest);
+        }
+      }
     });
+    // A rejected write must still allow subsequent operations on this message.
+    const settled = write.catch(() => {});
+    this.reactionWrites.set(key, settled);
+    try {
+      await write;
+    } finally {
+      if (this.reactionWrites.get(key) === settled) this.reactionWrites.delete(key);
+    }
   }
 
   private async poll(

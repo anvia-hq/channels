@@ -131,6 +131,26 @@ Ordinary reaction emoji are preserved. Custom and paid reaction values are repre
 `telegram:custom_emoji:<id>` and `telegram:paid`. Anonymous reactions use the acting chat as the
 normalized sender.
 
+### Removing bot reactions
+
+Telegram currently permits [one reaction per bot per message](https://core.telegram.org/bots/api#setmessagereaction).
+`channel.react(sent, emoji)` replaces that reaction. `channel.unreact(sent, emoji)` clears it only
+when the emoji matches the last successful reaction set through the same channel instance. For
+example, reacting with `👀`, then `👍`, then removing `👀` leaves `👍` in place. Reaction operations
+on the same chat/message are serialized so overlapping calls preserve this ordering.
+
+Tracking is in memory and bounded to the 1,000 most recently set message reactions. Removal is a
+no-op for unknown, evicted, already removed, or nonmatching reactions. A failed reaction request
+also discards tracking for that message because Telegram may have applied the change even if its
+response was lost. A new channel instance cannot remove reactions set by a previous instance.
+
+The Bot API provides no conditional removal by emoji, so this protection assumes reaction writes
+go through one channel instance with consistent chat/message IDs. Writes through another instance
+or directly through the Bot API cannot be tracked. Chat usernames and numeric IDs are not resolved
+to a shared identity, and Telegram redirects media-group reactions to the group's first remaining
+message; use the same chat ID and that message ID for all operations on an album. These limits
+prevent full parity with Discord and Slack's named-reaction removal.
+
 ## Attachments
 
 Incoming Telegram events expose file IDs as normalized metadata. `channel.loadAttachment()` calls
