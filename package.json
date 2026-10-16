@@ -22,7 +22,7 @@
     "test": "pnpm -r --if-present test && node --test scripts/release-packages.test.mjs",
     "typecheck": "pnpm -r --if-present typecheck",
     "verify:release": "pnpm check && pnpm typecheck && pnpm build && pnpm test",
-    "version-packages": "changeset version"
+    "version-packages": "changeset version && pnpm format && pnpm install --lockfile-only && pnpm install --frozen-lockfile && pnpm check"
   },
   "devDependencies": {
     "@changesets/cli": "^3.0.3",
