@@ -115,16 +115,101 @@ describe("normalizeTelegramUpdate", () => {
     });
   });
 
-  it("ignores commands addressed to a different bot", () => {
-    const command = messageUpdate({
-      updateId: 15,
-      chatId: -100,
-      chatType: "group",
-      text: "/ask@other_bot",
-      entities: [{ type: "bot_command", offset: 0, length: 14 }],
-    });
+  it.each(["private", "group", "supergroup"] as const)(
+    "ignores commands addressed to a different bot in %s chats",
+    (chatType) => {
+      const command = messageUpdate({
+        updateId: 15,
+        chatId: -100,
+        chatType,
+        text: "/ask@other_bot",
+        entities: [{ type: "bot_command", offset: 0, length: 14 }],
+      });
 
-    expect(normalizeTelegramUpdate(command, bot)[0]?.type).toBe("message");
+      expect(normalizeTelegramUpdate(command, bot)).toEqual([]);
+    },
+  );
+
+  describe.each(["group", "supergroup"] as const)("%s commands", (chatType) => {
+    const otherBot: TelegramUser = { ...bot, id: 43, username: "other_bot" };
+
+    it.each([{}, { allowBareGroupCommands: false }])(
+      "drops bare commands for both bots with options %j, even replies",
+      (options) => {
+        const command = messageUpdate({
+          updateId: 16,
+          chatId: -100,
+          chatType,
+          text: "/ask what time is it",
+          entities: [{ type: "bot_command", offset: 0, length: 4 }],
+          replyToBot: true,
+        });
+
+        for (const identity of [bot, otherBot]) {
+          expect(normalizeTelegramUpdate(command, identity, options)).toEqual([]);
+          expect(
+            normalizeTelegramUpdate(command, identity, { allowBareGroupCommands: true }),
+          ).toMatchObject([
+            {
+              type: "command",
+              accountId: String(identity.id),
+              name: "ask",
+              text: "what time is it",
+            },
+          ]);
+        }
+      },
+    );
+
+    it.each([false, true])(
+      "routes mixed-case targets only to the named bot (allowBareGroupCommands: %s)",
+      (allowBareGroupCommands) => {
+        for (const identity of [bot, otherBot]) {
+          const token = `/ask@${identity.username?.toUpperCase()}`;
+          const command = messageUpdate({
+            updateId: 17,
+            chatId: -100,
+            chatType,
+            threadId: 9,
+            text: `${token} hello`,
+            entities: [{ type: "bot_command", offset: 0, length: token.length }],
+            replyToBot: true,
+          });
+
+          for (const recipient of [bot, otherBot]) {
+            const events = normalizeTelegramUpdate(command, recipient, { allowBareGroupCommands });
+            if (recipient.id === identity.id) {
+              expect(events).toMatchObject([
+                {
+                  type: "command",
+                  accountId: String(identity.id),
+                  name: "ask",
+                  text: "hello",
+                  conversation: { id: "-100", kind: "group", threadId: "9" },
+                },
+              ]);
+            } else {
+              expect(events).toEqual([]);
+            }
+          }
+        }
+      },
+    );
+
+    it("drops empty targets and targets that cannot be verified", () => {
+      for (const token of ["/ask@", "/ask@anvia_bot"]) {
+        const command = messageUpdate({
+          updateId: 18,
+          chatId: -100,
+          chatType,
+          text: token,
+          entities: [{ type: "bot_command", offset: 0, length: token.length }],
+        });
+        const { username: _username, ...withoutUsername } = bot;
+        expect(normalizeTelegramUpdate(command, withoutUsername)).toEqual([]);
+        if (token === "/ask@") expect(normalizeTelegramUpdate(command, bot)).toEqual([]);
+      }
+    });
   });
 
   it("normalizes edited messages and reactions", () => {

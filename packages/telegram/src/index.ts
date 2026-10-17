@@ -5,6 +5,7 @@ export {
 } from "./bot-api-client.js";
 export type { TelegramBotApiClientOptions } from "./bot-api-client.js";
 export { normalizeTelegramUpdate } from "./normalize.js";
+export type { TelegramNormalizationOptions } from "./normalize.js";
 export { TelegramChannel, telegram } from "./telegram-channel.js";
 export type {
   TelegramBotApi,

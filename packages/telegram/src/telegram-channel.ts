@@ -15,6 +15,7 @@ import {
   parseTelegramUpdate,
 } from "./bot-api-client.js";
 import { normalizeTelegramUpdate } from "./normalize.js";
+import type { TelegramNormalizationOptions } from "./normalize.js";
 import type {
   TelegramBotApi,
   TelegramGetUpdatesRequest,
@@ -59,6 +60,7 @@ type TelegramChannelCommonOptions = Readonly<{
 }>;
 
 export type TelegramChannelOptions = TelegramChannelCommonOptions &
+  TelegramNormalizationOptions &
   (
     | Readonly<{
         token: string;
@@ -95,6 +97,7 @@ export class TelegramChannel implements Channel<TelegramUpdate> {
 
   private readonly api: TelegramBotApi;
   private readonly polling: Required<TelegramPollingOptions>;
+  private readonly normalization: TelegramNormalizationOptions;
   private readonly onError: TelegramChannelCommonOptions["onError"];
   private readonly webhook: Readonly<{ secretToken: string }> | undefined;
   private controller: AbortController | undefined;
@@ -127,6 +130,7 @@ export class TelegramChannel implements Channel<TelegramUpdate> {
       this.api = createTelegramBotApiClient(clientOptions);
     }
     this.polling = resolvePollingOptions(options.polling);
+    this.normalization = { allowBareGroupCommands: options.allowBareGroupCommands === true };
     this.webhook = resolveWebhookOptions(options.webhook);
     this.onError = options.onError;
   }
@@ -220,7 +224,7 @@ export class TelegramChannel implements Channel<TelegramUpdate> {
   ): Promise<void> {
     await this.acknowledgeCallbackQuery(update, controller.signal);
     if (controller.signal.aborted) return;
-    const events = normalizeTelegramUpdate(update, bot).filter(
+    const events = normalizeTelegramUpdate(update, bot, this.normalization).filter(
       (event) => !("sender" in event) || !event.sender.bot,
     );
     if (events.length === 0) {
@@ -434,7 +438,7 @@ export class TelegramChannel implements Channel<TelegramUpdate> {
 
         await this.acknowledgeCallbackQuery(update, signal);
         if (signal.aborted) break;
-        const events = normalizeTelegramUpdate(update, bot).filter(
+        const events = normalizeTelegramUpdate(update, bot, this.normalization).filter(
           (event) => !("sender" in event) || !event.sender.bot,
         );
         if (events.length === 0) {
