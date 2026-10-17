@@ -65,10 +65,16 @@ reaction lifecycle events are required.
 Enable **Interactivity & Shortcuts** for native message actions. Socket Mode acknowledges button
 payloads before application processing. Portable actions are rendered as Block Kit buttons.
 
-Socket envelopes are acknowledged before application processing and duplicate deliveries are
-suppressed by workspace, channel, and message timestamp. Slack threads map to `threadId`. Outbound
-Slack control mentions such as `<@U123>` and `<!channel>` are escaped so generated text cannot
-unexpectedly notify workspace members.
+Socket envelopes are acknowledged before application processing. `message` and `app_mention`
+callbacks share the dedupe key `message:<teamId>:<channelId>:<ts>`, so only the first callback for a
+message reaches the handler, regardless of event order. Redeliveries are also suppressed by
+`<socketRequestType>:<eventId>`. Edits, deletes, and reactions use their Events API event IDs;
+commands use their trigger IDs, and interactions use their trigger IDs (or message timestamp plus
+action timestamp when no trigger ID is present). These events do not use the message dedupe key.
+Both caches are in memory, each retaining up to 1,000 keys per transport instance.
+
+Slack threads map to `threadId`. Outbound Slack control mentions such as `<@U123>` and `<!channel>`
+are escaped so generated text cannot unexpectedly notify workspace members.
 
 Incoming images and other files are normalized and downloaded with the bot token only when an
 application or agent loads them. The authenticated Slack URL is not exposed to the model. Downloads
