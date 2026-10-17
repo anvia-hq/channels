@@ -41,6 +41,56 @@ describe("TelegramChannel", () => {
     await channel.stop();
   });
 
+  describe.each(["polling", "webhook"] as const)("%s command routing", (transport) => {
+    it.each([{}, { allowBareGroupCommands: false }, { allowBareGroupCommands: true }])(
+      "applies group command options %j before dispatch",
+      async (options) => {
+        const fake = fakeApi();
+        const updates: TelegramUpdate[] = ["/ask", "/ask@other_bot", "/ask@ANVIA_BOT"].map(
+          (text, index) => ({
+            update_id: index + 1,
+            message: {
+              message_id: index + 1,
+              from: { id: 7, is_bot: false, first_name: "Indra" },
+              chat: { id: -100, type: "supergroup" },
+              text,
+              entities: [{ type: "bot_command", offset: 0, length: text.length }],
+            },
+          }),
+        );
+        fake.getUpdates
+          .mockResolvedValueOnce({ updates, invalid: [] })
+          .mockImplementation(waitForAbort);
+        const handler = vi.fn<(event: unknown) => Promise<void>>(async () => undefined);
+        const channel = telegram({
+          api: fake.api,
+          ...options,
+          ...(transport === "webhook" ? { webhook: { secretToken: "test-secret" } } : {}),
+        });
+
+        try {
+          await channel.start(handler);
+          if (transport === "webhook") {
+            for (const update of updates) await channel.receiveWebhook(update, "test-secret");
+          } else {
+            await vi.waitFor(() => expect(fake.getUpdates).toHaveBeenCalledTimes(2));
+            expect(fake.getUpdates.mock.calls[1]?.[0].offset).toBe(4);
+          }
+          expect(handler.mock.calls.map(([event]) => event)).toMatchObject(
+            options.allowBareGroupCommands
+              ? [
+                  { id: "1", type: "command" },
+                  { id: "3", type: "command" },
+                ]
+              : [{ id: "3", type: "command" }],
+          );
+        } finally {
+          await channel.stop();
+        }
+      },
+    );
+  });
+
   it("does not dispatch bot-authored messages", async () => {
     const fake = fakeApi();
     fake.getUpdates

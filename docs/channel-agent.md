@@ -108,8 +108,9 @@ Behaviour and limits:
 
 ## Slash commands
 
-Set `commands: true` to handle platform slash commands — Slack `/commands`, Discord application
-commands, and Telegram bot commands. The agent runs with the prompt `/<name> <text>`:
+Commands are opt-in and ignored by default. Set `commands: true` to handle platform slash commands
+— Slack `/commands`, Discord application commands, and Telegram bot commands. The agent runs with
+the prompt `/<name> <text>`:
 
 ```ts
 const service = createChannelAgent({
@@ -158,9 +159,15 @@ Notes per platform:
 - **Discord**: register the application command (for example through the developer portal or a
   registration script). The gateway handles chat-input interactions; the reply is delivered as a
   regular channel message.
-- **Telegram**: commands (`/ask@botname`, `/ask`) are messages with a `bot_command` entity; the
-  adapter emits a `command` event for those addressed to this bot. Configure the command list
-  yourself through BotFather or `setMyCommands`; the adapter does not register commands.
+- **Telegram**: commands are messages with a leading `bot_command` entity. Private chats accept
+  bare commands (`/ask`). Groups and supergroups require `/ask@botname` by default, matching this
+  bot's username without regard to case. Set `allowBareGroupCommands: true` on `telegram(...)`
+  to accept bare group commands too; multiple bots opting in may respond. Bare group commands in
+  the default mode and commands targeting another bot are dropped, never emitted as ordinary
+  messages, so they cannot start a run through message filtering. This adapter option does not
+  enable agent command handling: `commands` must still be enabled on `createChannelAgent`.
+  Configure the command list yourself through BotFather or `setMyCommands`; the adapter does not
+  register commands.
 
 Bot-authored commands are always ignored, and commands run through the same pipeline as messages:
 filtering, acknowledgement reactions, sessions, streaming, and interactions all apply.
