@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { setTimeout } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 
 /** Select unpublished versions and recover publications made by this same revision. */
@@ -53,9 +54,7 @@ export async function releasePackages(packages, head, operations, recorded) {
   const plan = await planReleases(packages, head, operations, recorded);
   if (plan.some((pkg) => pkg.publish)) await operations.publish();
   for (const pkg of plan) {
-    const published = await operations.published(pkg);
-    if (published === null)
-      throw new Error(`${pkg.tag} is not visible on npm yet; retry this revision`);
+    const published = await waitForPublication(pkg, operations);
     if (published.gitHead && published.gitHead !== head) {
       throw new Error(`${pkg.tag} was published from a different commit`);
     }
@@ -68,6 +67,27 @@ export async function releasePackages(packages, head, operations, recorded) {
     if (!(await operations.releaseExists(pkg.tag))) await operations.createRelease(pkg.tag);
   }
   return plan;
+}
+
+async function waitForPublication(pkg, operations) {
+  const now = operations.now ?? (() => performance.now());
+  const sleep = operations.sleep ?? setTimeout;
+  const deadline = now() + 120_000;
+  let delay = 2_000;
+  for (;;) {
+    const published = await operations.published(pkg);
+    if (published !== null) return published;
+    const remaining = deadline - now();
+    if (remaining <= 0) {
+      throw new Error(
+        `${pkg.tag} is not visible on npm after waiting 2 minutes; ` +
+          "once visible, re-run the same workflow run so its saved plan is used. " +
+          "The dispatch revision must still be current main; otherwise see docs/releases.md for recovery.",
+      );
+    }
+    await sleep(Math.min(delay, remaining));
+    delay = Math.min(delay * 2, 30_000);
+  }
 }
 
 function run(command, args) {
