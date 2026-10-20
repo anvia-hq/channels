@@ -21,12 +21,19 @@ import type {
 
 type Mutable<T> = { -readonly [Key in keyof T]: T[Key] };
 
+export type TelegramNormalizationOptions = Readonly<{
+  /** Accept bare commands in groups and supergroups. Defaults to false. */
+  allowBareGroupCommands?: boolean;
+}>;
+
+// undefined means ordinary message; null means a command that must be ignored.
 function telegramCommand(
   update: TelegramUpdate,
   message: TelegramMessage,
   text: string,
   bot: TelegramUser,
-): ChannelCommandEvent<TelegramUpdate> | undefined {
+  options: TelegramNormalizationOptions,
+): ChannelCommandEvent<TelegramUpdate> | undefined | null {
   const entity = (message.entities ?? []).find(
     (candidate) => candidate.type === "bot_command" && candidate.offset === 0,
   );
@@ -42,7 +49,12 @@ function telegramCommand(
       .trim()
       .toLowerCase();
     const username = bot.username?.toLowerCase();
-    if (target.length > 0 && (username === undefined || target !== username)) return undefined;
+    if (target.length === 0 || username === undefined || target !== username) return null;
+  } else if (
+    (message.chat.type === "group" || message.chat.type === "supergroup") &&
+    options.allowBareGroupCommands !== true
+  ) {
+    return null;
   }
   const sender = message.from;
   if (sender === undefined) return undefined;
@@ -66,6 +78,7 @@ function telegramCommand(
 export function normalizeTelegramUpdate(
   update: TelegramUpdate,
   bot: TelegramUser,
+  options: TelegramNormalizationOptions = {},
 ): readonly ChannelEvent<TelegramUpdate>[] {
   if (update.callback_query !== undefined) return eventArray(normalizeTelegramAction(update, bot));
   if (update.message_reaction !== undefined) return normalizeTelegramReaction(update, bot);
@@ -76,7 +89,8 @@ export function normalizeTelegramUpdate(
   const attachments = telegramAttachments(message);
   if (text.length === 0 && attachments.length === 0) return [];
 
-  const command = telegramCommand(update, message, text, bot);
+  const command = telegramCommand(update, message, text, bot, options);
+  if (command === null) return [];
   if (command !== undefined) return eventArray(command);
 
   const threadId = message.message_thread_id;

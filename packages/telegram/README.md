@@ -64,6 +64,19 @@ reaction tracked by this channel instance, leaving unknown or different reaction
 validates one platform-sized logical delivery and rejects oversized text. A message with several
 attachments uses multiple Bot API calls and may be partially delivered if an upload fails.
 
+## Commands
+
+Private chats accept bare commands such as `/ask`. In groups and supergroups, commands must target
+this bot (`/ask@botname`) by default; username matching ignores case. Set
+`allowBareGroupCommands: true` on `telegram(...)` to accept bare group commands too. Multiple bots
+opting in may respond. The option applies to polling and webhooks, and is also available as the
+third argument to `normalizeTelegramUpdate(update, bot, options)`.
+
+Bare group commands in the default mode and commands aimed at another bot are dropped, without
+falling through as ordinary messages. Agent command handling is separately opt-in via
+`createChannelAgent({ channel, agent, commands: true })`; it is disabled by default. Configure the
+command menu through BotFather or `setMyCommands`. See the [command policy](../../docs/telegram.md#commands).
+
 ## Webhook transport
 
 Configure Telegram's webhook URL separately, including the same secret token, and forward the
