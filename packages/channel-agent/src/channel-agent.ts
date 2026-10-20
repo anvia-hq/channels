@@ -339,6 +339,7 @@ export class ChannelAgentService<RawEvent = unknown, Output = string> {
 
   private async deliver(
     address: ChannelAddress,
+    event: ChannelEvent<RawEvent>,
     provisional: SentChannelMessage | undefined,
     response: string | ChannelMessage,
     deliveredText?: string,
@@ -356,7 +357,20 @@ export class ChannelAgentService<RawEvent = unknown, Output = string> {
       if (deleteMessage === undefined) {
         throw new Error("Attachment delivery with a placeholder requires channel deletion support");
       }
-      await sendChannelMessage({ channel: this.options.channel, address, message });
+      try {
+        await sendChannelMessage({ channel: this.options.channel, address, message });
+      } catch (error) {
+        // Best-effort placeholder cleanup: the send error (e.g. a
+        // PartialDeliveryError with sent/failedIndex details) must win, so a
+        // failing delete must not replace it. Report the delete failure
+        // separately instead.
+        try {
+          await deleteMessage.call(this.options.channel, provisional);
+        } catch (deleteError) {
+          await this.reportError(deleteError, { stage: "delivery", event });
+        }
+        throw error;
+      }
       await deleteMessage.call(this.options.channel, provisional);
       return;
     }
@@ -424,7 +438,7 @@ export class ChannelAgentService<RawEvent = unknown, Output = string> {
     // Once an outcome is being finalized, shutdown must drain its delivery too.
     // In particular, a stored interaction must have a prompt the user can answer.
     try {
-      await this.deliver(eventAddress(event), provisional, response, deliveredText);
+      await this.deliver(eventAddress(event), event, provisional, response, deliveredText);
     } catch (error) {
       if (pending !== undefined) await this.rollbackInteraction(event, pending);
       await this.reportError(error, { stage: "delivery", event });
@@ -521,7 +535,12 @@ export class ChannelAgentService<RawEvent = unknown, Output = string> {
     }
     if (response === undefined) {
       try {
-        await this.deliver(eventAddress(event), undefined, interactions.invalidResponseMessage);
+        await this.deliver(
+          eventAddress(event),
+          event,
+          undefined,
+          interactions.invalidResponseMessage,
+        );
       } catch (error) {
         await this.reportError(error, { stage: "delivery", event });
       }
@@ -641,7 +660,7 @@ export class ChannelAgentService<RawEvent = unknown, Output = string> {
     message: string,
   ): Promise<void> {
     try {
-      await this.deliver(eventAddress(event), undefined, message);
+      await this.deliver(eventAddress(event), event, undefined, message);
     } catch (error) {
       await this.reportError(error, { stage: "delivery", event });
     }
@@ -699,7 +718,7 @@ export class ChannelAgentService<RawEvent = unknown, Output = string> {
     if (this.options.errorMessage === false) return;
 
     try {
-      await this.deliver(eventAddress(event), provisional, this.options.errorMessage);
+      await this.deliver(eventAddress(event), event, provisional, this.options.errorMessage);
     } catch (deliveryError) {
       await this.reportError(deliveryError, { stage: "delivery", event });
     }
