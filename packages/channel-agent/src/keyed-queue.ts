@@ -45,6 +45,30 @@ export class KeyedQueue {
     };
   }
 
+  /**
+   * Runs `task` under this key's tail with a detach timer that is armed only
+   * once the task actually starts. When `timeoutMs` elapses while the task is
+   * still running, the tail moves off it so later messages for the key can
+   * proceed; a task that settles first never detaches. The returned promise
+   * always follows `task` to completion so channel backpressure is kept.
+   */
+  runWithStartTimeout(key: string, task: () => Promise<void>, timeoutMs: number): Promise<void> {
+    if (timeoutMs === Number.POSITIVE_INFINITY) {
+      return this.runDetached(key, task).finished;
+    }
+    let detach: (() => void) | undefined;
+    const detached = this.runDetached(key, async () => {
+      const timer = setTimeout(() => detach?.(), timeoutMs);
+      try {
+        await task();
+      } finally {
+        clearTimeout(timer);
+      }
+    });
+    detach = detached.detach;
+    return detached.finished;
+  }
+
   async drain(): Promise<void> {
     await Promise.allSettled(this.tails.values());
   }

@@ -966,6 +966,75 @@ describe("ChannelAgentService", () => {
     );
   });
 
+  it("rejects a run timeout above the setTimeout limit", async () => {
+    const channel = new FakeChannel();
+    const agent = fakeAgent({ streaming: false });
+
+    expect(() => createChannelAgent({ channel, agent, runTimeoutMs: 2_147_483_648 })).toThrow(
+      "run timeout must be a positive integer",
+    );
+    expect(() =>
+      createChannelAgent({ channel, agent, runTimeoutMs: Number.POSITIVE_INFINITY }),
+    ).not.toThrow();
+  });
+
+  it("keeps per-conversation serialization when a slow run is queued behind earlier work", async () => {
+    vi.useFakeTimers();
+    try {
+      const channel = new FakeChannel();
+      const started: string[] = [];
+      const settled: string[] = [];
+      const firstGate = deferred<void>();
+      const secondGate = deferred<void>();
+      const generate = vi.fn((input: ChannelAgentRunInput) => {
+        const text = String(input.prompt);
+        if (text === "third") {
+          // The third message must not start before the second has settled.
+          expect(settled).toEqual(["first", "second"]);
+          settled.push(text);
+          return Promise.resolve(agentResponse(`${text} done`));
+        }
+        started.push(text);
+        const gate = text === "first" ? firstGate.promise : secondGate.promise;
+        return gate.then(() => {
+          settled.push(text);
+          return agentResponse(`${text} done`);
+        });
+      });
+      const service = await serveChannelAgent({
+        channel,
+        agent: fakeAgent({ generate, streaming: false }),
+        streaming: { placeholder: false },
+        runTimeoutMs: 1_000,
+      });
+
+      const firstRun = channel.emit(messageEvent({ id: "1", text: "first" }));
+      // Queue the second message behind the first before it settles.
+      await vi.waitFor(() => expect(generate).toHaveBeenCalledTimes(1));
+      const secondRun = channel.emit(messageEvent({ id: "2", text: "second" }));
+      const thirdRun = channel.emit(messageEvent({ id: "3", text: "third" }));
+
+      // Let the first run hold the queue past the detach timeout, then settle
+      // both queued runs without advancing far enough to detach either of them
+      // from their own start.
+      await vi.advanceTimersByTimeAsync(500);
+      firstGate.resolve();
+      await firstRun;
+      await vi.waitFor(() => expect(started).toEqual(["first", "second"]));
+      await vi.advanceTimersByTimeAsync(500);
+      secondGate.resolve();
+      await secondRun;
+      await thirdRun;
+
+      expect(settled).toEqual(["first", "second", "third"]);
+      expect(started).toEqual(["first", "second"]);
+      expect(generate).toHaveBeenCalledTimes(3);
+      await service.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("reports agent failures and replaces the placeholder with an error", async () => {
     const channel = new FakeChannel();
     const error = new Error("model unavailable");

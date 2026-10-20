@@ -40,6 +40,8 @@ import type {
 
 const DEFAULT_EDIT_INTERVAL_MS = 750;
 const DEFAULT_RUN_TIMEOUT_MS = 5 * 60 * 1_000;
+/** Largest delay `setTimeout` honors without clamping to 1 ms. */
+const MAX_TIMEOUT_MS = 2_147_483_647;
 const DEFAULT_PLACEHOLDER = "Thinking…";
 const DEFAULT_ERROR_MESSAGE = "Sorry, I couldn't process that message.";
 const DEFAULT_EMPTY_RESPONSE_MESSAGE = "I couldn't produce a response.";
@@ -211,20 +213,13 @@ export class ChannelAgentService<RawEvent = unknown, Output = string> {
    * the run times out instead of wedging later messages for the conversation
    * or `stop()`. Detaching moves the queue tail off the abandoned task; the
    * returned promise still follows the task so channel backpressure is kept.
+   *
+   * The detach timer is armed when the task actually starts, not when it is
+   * enqueued, so a message queued behind earlier work is not detached while
+   * it is still legitimately running.
    */
   private async runSerialized(key: string, task: () => Promise<void>): Promise<void> {
-    const detached = this.queue.runDetached(key, task);
-    let timeout: ReturnType<typeof setTimeout> | undefined;
-    try {
-      const timer =
-        this.options.runTimeoutMs === Number.POSITIVE_INFINITY
-          ? undefined
-          : setTimeout(() => detached.detach(), this.options.runTimeoutMs);
-      timeout = timer;
-      await detached.finished;
-    } finally {
-      clearTimeout(timeout);
-    }
+    await this.queue.runWithStartTimeout(key, task, this.options.runTimeoutMs);
   }
 
   private async processAction(
@@ -820,9 +815,11 @@ function resolveOptions<RawEvent, Output>(
   const runTimeoutMs = options.runTimeoutMs ?? DEFAULT_RUN_TIMEOUT_MS;
   if (
     runTimeoutMs !== Number.POSITIVE_INFINITY &&
-    (!Number.isSafeInteger(runTimeoutMs) || runTimeoutMs <= 0)
+    (!Number.isSafeInteger(runTimeoutMs) || runTimeoutMs <= 0 || runTimeoutMs > MAX_TIMEOUT_MS)
   ) {
-    throw new TypeError("Channel agent run timeout must be a positive integer");
+    throw new TypeError(
+      "Channel agent run timeout must be a positive integer no larger than 2147483647",
+    );
   }
   const interactions = resolveInteractionOptions(options.interactions);
   const multimodal =
