@@ -1,5 +1,12 @@
 # @anvia/discord
 
+## 0.3.3
+
+### Patch Changes
+
+- Updated dependencies [de633dd]
+  - @anvia/channel@0.4.2
+
 ## 0.3.2
 
 ### Patch Changes

@@ -1,5 +1,14 @@
 # @anvia/slack
 
+## 0.4.1
+
+### Patch Changes
+
+- 4276f7a: Deduplicate Slack message and app_mention callbacks by workspace, channel, and message timestamp to prevent double replies. Preserve event redelivery suppression and separate lifecycle, command, and interaction identities.
+- 35d65e7: Fix `SlackChannel.splitMessage` to keep `replyToMessageId` on every split part, so long replies keep all continuations in the reply thread instead of dropping them to the channel top level.
+- Updated dependencies [de633dd]
+  - @anvia/channel@0.4.2
+
 ## 0.4.0
 
 ### Minor Changes

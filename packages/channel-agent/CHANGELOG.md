@@ -1,5 +1,14 @@
 # @anvia/channel-agent
 
+## 0.4.3
+
+### Patch Changes
+
+- bfa01ac: Fix attachment delivery with a streaming placeholder to delete the provisional placeholder when `sendChannelMessage` throws `PartialDeliveryError`, so a failed attachment send no longer leaves a dangling "Thinking…" message. The error still propagates to the existing delivery error reporting unchanged.
+- d0c3f17: Bound channel agent runs with a configurable execution timeout (`runTimeoutMs`, default five minutes). A hung `generate`, `stream`, or `resume` call now aborts its run signal and reports through the existing `agent`-stage error path instead of wedging the conversation queue or `stop()`.
+- Updated dependencies [de633dd]
+  - @anvia/channel@0.4.2
+
 ## 0.4.2
 
 ### Patch Changes
