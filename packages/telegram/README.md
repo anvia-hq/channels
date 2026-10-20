@@ -87,4 +87,8 @@ configure `polling` and `webhook` together.
 
 Polling processes valid updates in update-ID order and preserves the retry checkpoint when a
 handler fails. Malformed later entries cannot advance it past that failure; their checkpoint is
-applied only after the valid batch completes.
+applied only after the valid batch completes. Handler retries back off exponentially from the
+configured retry delay (doubling per consecutive failure for the same update, capped at 30
+seconds), and an update is dropped with `poisoned: true` after `maxHandlerAttempts` failures
+(default 10, roughly 2.5 minutes of consecutive failures). Set `onError` to observe drops; without
+it, discards are silent.

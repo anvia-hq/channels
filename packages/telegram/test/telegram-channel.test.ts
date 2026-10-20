@@ -221,6 +221,139 @@ describe("TelegramChannel", () => {
     await channel.stop();
   });
 
+  it("backs off exponentially between handler failures", async () => {
+    vi.useFakeTimers();
+    try {
+      const update = textUpdate(10);
+      const fake = fakeApi();
+      fake.getUpdates.mockImplementation(async (request, signal) => {
+        if ((request.offset ?? 0) <= 10) {
+          return { updates: [update], invalid: [] };
+        }
+        return waitForAbort(request, signal);
+      });
+      const handler = vi
+        .fn<(event: unknown) => Promise<void>>()
+        .mockRejectedValueOnce(new Error("first failure"))
+        .mockRejectedValueOnce(new Error("second failure"))
+        .mockResolvedValue(undefined);
+      const onError = vi.fn();
+      const channel = telegram({
+        api: fake.api,
+        polling: { retryDelayMs: 10 },
+        maxHandlerAttempts: 10,
+        onError,
+      });
+
+      await channel.start(handler);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(handler).toHaveBeenCalledTimes(1);
+
+      // First handler retry waits the base delay (10ms).
+      await vi.advanceTimersByTimeAsync(9);
+      expect(handler).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(handler).toHaveBeenCalledTimes(2);
+
+      // Second handler retry waits the doubled delay (20ms).
+      await vi.advanceTimersByTimeAsync(19);
+      expect(handler).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(handler).toHaveBeenCalledTimes(3);
+
+      expect(fake.getUpdates.mock.lastCall?.[0]).toMatchObject({ offset: 11 });
+      expect(onError).toHaveBeenCalledTimes(2);
+      expect(onError).not.toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ poisoned: true }),
+      );
+
+      await channel.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("caps the handler backoff at 30 seconds", async () => {
+    vi.useFakeTimers();
+    try {
+      const update = textUpdate(10);
+      const fake = fakeApi();
+      fake.getUpdates.mockImplementation(async (request, signal) => {
+        if ((request.offset ?? 0) <= 10) {
+          return { updates: [update], invalid: [] };
+        }
+        return waitForAbort(request, signal);
+      });
+      const handler = vi
+        .fn<(event: unknown) => Promise<void>>()
+        .mockRejectedValue(new Error("always fails"));
+      const onError = vi.fn();
+      const channel = telegram({
+        api: fake.api,
+        polling: { retryDelayMs: 20_000 },
+        maxHandlerAttempts: 3,
+        onError,
+      });
+
+      await channel.start(handler);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(handler).toHaveBeenCalledTimes(1);
+
+      // Attempt 2 waits 20s, attempt 3 would wait 40s but is capped at 30s.
+      await vi.advanceTimersByTimeAsync(20_000);
+      expect(handler).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersByTimeAsync(29_999);
+      expect(handler).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(handler).toHaveBeenCalledTimes(3);
+
+      expect(onError).toHaveBeenCalledWith(expect.objectContaining({ message: "always fails" }), {
+        operation: "handle",
+        update,
+        poisoned: true,
+      });
+
+      await channel.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("bounds webhook attempt tracking and clears it on stop", async () => {
+    const fake = fakeApi();
+    const handler = vi.fn(async () => {
+      throw new Error("always fails");
+    });
+    const onError = vi.fn();
+    const channel = telegram({
+      api: fake.api,
+      webhook: { secretToken: "webhook_secret" },
+      maxHandlerAttempts: 2,
+      onError,
+    });
+    await channel.start(handler);
+
+    try {
+      // More distinct failing updates than the remembered-update cap.
+      for (let id = 1; id <= 1_002; id++) {
+        await expect(channel.receiveWebhook(textUpdate(id), "webhook_secret")).rejects.toThrow(
+          "always fails",
+        );
+      }
+      const attempts = (channel as unknown as { webhookAttempts: Map<number, number> })
+        .webhookAttempts;
+      expect(attempts.size).toBeLessThanOrEqual(1_000);
+      expect(attempts.has(1)).toBe(false);
+      expect(attempts.has(1_002)).toBe(true);
+
+      await channel.stop();
+      expect(attempts.size).toBe(0);
+    } finally {
+      await channel.stop();
+    }
+  });
+
   it("backs off exponentially between poll failures and resets after success", async () => {
     vi.useFakeTimers();
     try {

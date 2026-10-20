@@ -28,7 +28,7 @@ import type {
 const DEFAULT_POLL_TIMEOUT_SECONDS = 30;
 const DEFAULT_RETRY_DELAY_MS = 1_000;
 const DEFAULT_POLL_LIMIT = 100;
-const DEFAULT_MAX_HANDLER_ATTEMPTS = 5;
+const DEFAULT_MAX_HANDLER_ATTEMPTS = 10;
 const MAX_MESSAGE_LENGTH = 4_096;
 const MAX_REMEMBERED_UPDATES = 1_000;
 const MAX_REMEMBERED_REACTIONS = 1_000;
@@ -63,7 +63,15 @@ type TelegramChannelCommonOptions = Readonly<{
   webhook?: TelegramWebhookOptions;
   /**
    * Maximum handler attempts for the same update before it is treated as poison
-   * and skipped. Must be a positive integer; defaults to 5.
+   * and skipped. Must be a positive integer; defaults to 10.
+   *
+   * In polling mode, handler retries back off exponentially from `retryDelayMs`
+   * (1s, 2s, 4s, ... capped at 30s), so the default tolerates roughly 2.5 minutes
+   * of consecutive failures before dropping the update. In webhook mode the delay
+   * between attempts follows Telegram's redelivery schedule.
+   *
+   * A dropped update is reported through `onError` with `poisoned: true`. Set
+   * `onError` to observe drops; without it, discards are silent.
    */
   maxHandlerAttempts?: number;
   onError?: (error: unknown, context: TelegramChannelErrorContext) => void | Promise<void>;
@@ -195,6 +203,7 @@ export class TelegramChannel implements Channel<TelegramUpdate> {
     if (this.controller === controller) this.controller = undefined;
     this.handler = undefined;
     this.bot = undefined;
+    this.webhookAttempts.clear();
   }
 
   async receiveWebhook(value: unknown, secretToken?: string): Promise<void> {
@@ -254,7 +263,7 @@ export class TelegramChannel implements Channel<TelegramUpdate> {
         await this.reportError(error, { operation: "handle", update, poisoned: true });
         return;
       }
-      this.webhookAttempts.set(update.update_id, attempts);
+      rememberAttempt(this.webhookAttempts, update.update_id, attempts);
       await this.reportError(error, { operation: "handle", update });
       throw error;
     }
@@ -450,6 +459,7 @@ export class TelegramChannel implements Channel<TelegramUpdate> {
       }
 
       let handlerFailed = false;
+      let handlerRetryDelayMs = this.polling.retryDelayMs;
       for (const update of updates) {
         if (signal.aborted) break;
         if (handledUpdates.has(update.update_id)) {
@@ -486,6 +496,7 @@ export class TelegramChannel implements Channel<TelegramUpdate> {
           handlerAttempts.set(update.update_id, attempts);
           await this.reportError(error, { operation: "handle", update });
           handlerFailed = true;
+          handlerRetryDelayMs = backoffDelay(this.polling.retryDelayMs, attempts);
           break;
         }
       }
@@ -495,7 +506,7 @@ export class TelegramChannel implements Channel<TelegramUpdate> {
         offset = Math.max(offset ?? malformedOffset, malformedOffset);
       }
       if (handlerFailed && !signal.aborted) {
-        await abortableDelay(this.polling.retryDelayMs, signal);
+        await abortableDelay(handlerRetryDelayMs, signal);
       }
     }
   }
@@ -663,7 +674,19 @@ function retryDelay(error: unknown, fallback: number, attempt: number): number {
   if (error instanceof TelegramApiError && error.retryAfterSeconds !== undefined) {
     return error.retryAfterSeconds * 1_000;
   }
-  return Math.min(fallback * 2 ** (attempt - 1), MAX_RETRY_DELAY_MS);
+  return backoffDelay(fallback, attempt);
+}
+
+function backoffDelay(baseMs: number, attempt: number): number {
+  return Math.min(baseMs * 2 ** (attempt - 1), MAX_RETRY_DELAY_MS);
+}
+
+function rememberAttempt(attempts: Map<number, number>, updateId: number, count: number): void {
+  attempts.delete(updateId);
+  attempts.set(updateId, count);
+  if (attempts.size <= MAX_REMEMBERED_UPDATES) return;
+  const oldest = attempts.keys().next().value;
+  if (oldest !== undefined) attempts.delete(oldest);
 }
 
 function abortableDelay(milliseconds: number, signal: AbortSignal): Promise<void> {
