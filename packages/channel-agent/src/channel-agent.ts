@@ -151,9 +151,7 @@ export class ChannelAgentService<RawEvent = unknown, Output = string> {
 
     if (event.type === "action") {
       if (event.sender.bot) return;
-      await this.runSerialized(channelConversationKey(event), () =>
-        this.processAction(event, signal),
-      );
+      await this.queue.run(channelConversationKey(event), () => this.processAction(event, signal));
       return;
     }
     if (event.type === "command") {
@@ -189,7 +187,7 @@ export class ChannelAgentService<RawEvent = unknown, Output = string> {
           overrides.renderOutcome = (request) => renderOutcome({ ...request, event: commandEvent });
         }
       }
-      await this.runSerialized(channelConversationKey(event), () =>
+      await this.queue.run(channelConversationKey(event), () =>
         this.process(commandAsMessage(event), signal, overrides),
       );
       return;
@@ -205,21 +203,7 @@ export class ChannelAgentService<RawEvent = unknown, Output = string> {
     }
     if (!shouldHandle || signal.aborted) return;
 
-    await this.runSerialized(channelConversationKey(event), () => this.process(event, signal));
-  }
-
-  /**
-   * Serializes work per conversation while a hung agent run holds the queue:
-   * the run times out instead of wedging later messages for the conversation
-   * or `stop()`. Detaching moves the queue tail off the abandoned task; the
-   * returned promise still follows the task so channel backpressure is kept.
-   *
-   * The detach timer is armed when the task actually starts, not when it is
-   * enqueued, so a message queued behind earlier work is not detached while
-   * it is still legitimately running.
-   */
-  private async runSerialized(key: string, task: () => Promise<void>): Promise<void> {
-    await this.queue.runWithStartTimeout(key, task, this.options.runTimeoutMs);
+    await this.queue.run(channelConversationKey(event), () => this.process(event, signal));
   }
 
   private async processAction(
@@ -378,8 +362,9 @@ export class ChannelAgentService<RawEvent = unknown, Output = string> {
    * Bounds a single agent run (generate, stream, or resume) with the
    * configured execution timeout. On timeout the run's signal aborts so a
    * cooperative executor settles promptly; the error surfaces through the
-   * standard `agent`-stage reporting path. A hung executor keeps the timeout
-   * error flowing while the queue-level detach lets later messages proceed.
+   * standard `agent`-stage reporting path. Racing the executor releases its
+   * caller even if it ignores cancellation, while the queue still drains
+   * error handling and delivery before processing the next message.
    */
   private runWithTimeout<Value>(
     signal: AbortSignal,
@@ -402,7 +387,7 @@ export class ChannelAgentService<RawEvent = unknown, Output = string> {
               reject(timedOutError());
             }, this.options.runTimeoutMs);
           });
-    const result = run(controller.signal);
+    const result = Promise.resolve().then(() => run(controller.signal));
     void result.catch(() => undefined);
     return Promise.race([result, timeout]).finally(() => {
       clearTimeout(timer);

@@ -350,6 +350,9 @@ Pending interactions can expire, be cancelled, and fail safely:
 before it is aborted and reported through `onError` with stage `"agent"`. It defaults to `300_000`
 (five minutes); pass `Number.POSITIVE_INFINITY` to disable the bound.
 
+The timeout starts when the executor is called. Prompt preparation, outcome rendering, and
+delivery remain serialized for each conversation, and shutdown waits for their completion.
+
 `runTimeoutMs` is different from `interactions.timeoutMs`: the former bounds execution time of one
 agent run, while the latter only controls how long a rendered interaction stays resumable.
 
