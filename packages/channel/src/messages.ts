@@ -56,7 +56,7 @@ export function splitChannelMessage(
       attachments?: NonNullable<ChannelMessage["attachments"]>;
     } = { text };
 
-    if (message.replyToMessageId !== undefined) {
+    if (index === 0 && message.replyToMessageId !== undefined) {
       part.replyToMessageId = message.replyToMessageId;
     }
     if (index === textParts.length - 1) {

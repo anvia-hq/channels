@@ -43,6 +43,32 @@ describe("channel message delivery", () => {
     ]);
   });
 
+  it("places the reply reference on the first split message only", () => {
+    const attachment = {
+      type: "file" as const,
+      mediaType: "application/pdf",
+      filename: "report.pdf",
+      source: { type: "data" as const, data: "cGRm" },
+    };
+    const action = { id: "approve", label: "Approve", style: "primary" } as const;
+
+    const parts = splitChannelMessage({
+      message: {
+        text: "abcdefgh",
+        replyToMessageId: "message-1",
+        actions: [action],
+        attachments: [attachment],
+      },
+      maximumLength: 3,
+    });
+
+    expect(parts).toHaveLength(3);
+    expect(parts[0]).toEqual({ text: "abc", replyToMessageId: "message-1" });
+    expect(parts[1]).toEqual({ text: "def" });
+    expect(parts[2]).toEqual({ text: "gh", actions: [action], attachments: [attachment] });
+    expect(parts.filter((part) => part.replyToMessageId !== undefined)).toHaveLength(1);
+  });
+
   it("validates the portable action limits", () => {
     expect(() =>
       validateChannelActions([
@@ -82,7 +108,7 @@ describe("channel message delivery", () => {
       }),
     ).toEqual([
       { text: "abc", replyToMessageId: "message-1" },
-      { text: "def", replyToMessageId: "message-1", attachments: [attachment] },
+      { text: "def", attachments: [attachment] },
     ]);
     expect(
       splitChannelMessage({ message: { text: "", attachments: [attachment] }, maximumLength: 3 }),
