@@ -28,6 +28,7 @@ import type {
 const DEFAULT_POLL_TIMEOUT_SECONDS = 30;
 const DEFAULT_RETRY_DELAY_MS = 1_000;
 const DEFAULT_POLL_LIMIT = 100;
+const DEFAULT_MAX_HANDLER_ATTEMPTS = 5;
 const MAX_MESSAGE_LENGTH = 4_096;
 const MAX_REMEMBERED_UPDATES = 1_000;
 const MAX_REMEMBERED_REACTIONS = 1_000;
@@ -45,6 +46,11 @@ export type TelegramChannelErrorContext = Readonly<{
   update?: TelegramUpdate;
   /** Bot API error_code when the failure originated from Telegram itself. */
   errorCode?: number;
+  /**
+   * True when the failing update was dropped after exhausting its handler attempts.
+   * The update has been reported through the existing error path and skipped.
+   */
+  poisoned?: boolean;
 }>;
 
 export type TelegramWebhookOptions = Readonly<{
@@ -55,6 +61,11 @@ export type TelegramWebhookOptions = Readonly<{
 type TelegramChannelCommonOptions = Readonly<{
   polling?: TelegramPollingOptions;
   webhook?: TelegramWebhookOptions;
+  /**
+   * Maximum handler attempts for the same update before it is treated as poison
+   * and skipped. Must be a positive integer; defaults to 5.
+   */
+  maxHandlerAttempts?: number;
   onError?: (error: unknown, context: TelegramChannelErrorContext) => void | Promise<void>;
 }>;
 
@@ -95,6 +106,7 @@ export class TelegramChannel implements Channel<TelegramUpdate> {
 
   private readonly api: TelegramBotApi;
   private readonly polling: Required<TelegramPollingOptions>;
+  private readonly maxHandlerAttempts: number;
   private readonly onError: TelegramChannelCommonOptions["onError"];
   private readonly webhook: Readonly<{ secretToken: string }> | undefined;
   private controller: AbortController | undefined;
@@ -103,6 +115,7 @@ export class TelegramChannel implements Channel<TelegramUpdate> {
   private bot: TelegramUser | undefined;
   private readonly handledWebhookUpdates = new Set<number>();
   private readonly webhookDeliveries = new Map<number, Promise<void>>();
+  private readonly webhookAttempts = new Map<number, number>();
   private readonly reactions = new Map<string, string>();
   private readonly reactionWrites = new Map<string, Promise<void>>();
 
@@ -128,6 +141,7 @@ export class TelegramChannel implements Channel<TelegramUpdate> {
     }
     this.polling = resolvePollingOptions(options.polling);
     this.webhook = resolveWebhookOptions(options.webhook);
+    this.maxHandlerAttempts = resolveMaxHandlerAttempts(options.maxHandlerAttempts);
     this.onError = options.onError;
   }
 
@@ -230,7 +244,17 @@ export class TelegramChannel implements Channel<TelegramUpdate> {
     try {
       for (const event of events) await handler(event);
       rememberUpdate(this.handledWebhookUpdates, update.update_id);
+      this.webhookAttempts.delete(update.update_id);
     } catch (error) {
+      const attempts = (this.webhookAttempts.get(update.update_id) ?? 0) + 1;
+      if (attempts >= this.maxHandlerAttempts) {
+        // Drop the poison update and report it so Telegram stops retrying it.
+        this.webhookAttempts.delete(update.update_id);
+        rememberUpdate(this.handledWebhookUpdates, update.update_id);
+        await this.reportError(error, { operation: "handle", update, poisoned: true });
+        return;
+      }
+      this.webhookAttempts.set(update.update_id, attempts);
       await this.reportError(error, { operation: "handle", update });
       throw error;
     }
@@ -391,6 +415,7 @@ export class TelegramChannel implements Channel<TelegramUpdate> {
   ): Promise<void> {
     let offset: number | undefined;
     const handledUpdates = new Set<number>();
+    const handlerAttempts = new Map<number, number>();
     let pollFailures = 0;
 
     while (!signal.aborted) {
@@ -447,7 +472,18 @@ export class TelegramChannel implements Channel<TelegramUpdate> {
           for (const event of events) await handler(event);
           offset = nextOffset(offset, update.update_id);
           rememberUpdate(handledUpdates, update.update_id);
+          handlerAttempts.delete(update.update_id);
         } catch (error) {
+          const attempts = (handlerAttempts.get(update.update_id) ?? 0) + 1;
+          if (attempts >= this.maxHandlerAttempts) {
+            // Skip the poison update so one failing update cannot stall the batch.
+            handlerAttempts.delete(update.update_id);
+            offset = nextOffset(offset, update.update_id);
+            rememberUpdate(handledUpdates, update.update_id);
+            await this.reportError(error, { operation: "handle", update, poisoned: true });
+            continue;
+          }
+          handlerAttempts.set(update.update_id, attempts);
           await this.reportError(error, { operation: "handle", update });
           handlerFailed = true;
           break;
@@ -500,6 +536,11 @@ function resolvePollingOptions(
     ),
     limit: integerInRange(options.limit ?? DEFAULT_POLL_LIMIT, 1, 100, "Telegram polling limit"),
   };
+}
+
+function resolveMaxHandlerAttempts(value: number | undefined): number {
+  if (value === undefined) return DEFAULT_MAX_HANDLER_ATTEMPTS;
+  return positiveInteger(value, "Telegram maximum handler attempts");
 }
 
 function resolveWebhookOptions(

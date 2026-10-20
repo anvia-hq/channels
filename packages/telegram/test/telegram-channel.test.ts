@@ -92,6 +92,51 @@ describe("TelegramChannel", () => {
     await channel.stop();
   });
 
+  it("skips a poison update after exhausting handler attempts and delivers the rest", async () => {
+    const poison = textUpdate(10);
+    const healthy = textUpdate(11);
+    const fake = fakeApi();
+    fake.getUpdates.mockImplementation(async (request, signal) => {
+      if ((request.offset ?? 0) <= 11) {
+        return { updates: [poison, healthy], invalid: [] };
+      }
+      return waitForAbort(request, signal);
+    });
+    const handler = vi.fn<(event: unknown) => Promise<void>>(async (event) => {
+      if ((event as { id: string }).id === "10") throw new Error("always fails");
+    });
+    const onError = vi.fn();
+    const channel = telegram({
+      api: fake.api,
+      polling: { retryDelayMs: 0 },
+      maxHandlerAttempts: 3,
+      onError,
+    });
+
+    await channel.start(handler);
+    try {
+      await vi.waitFor(() =>
+        expect(
+          handler.mock.calls.filter(([event]) => (event as { id: string }).id === "11"),
+        ).toHaveLength(1),
+      );
+      await vi.waitFor(() => expect(fake.getUpdates.mock.lastCall?.[0].offset).toBe(12));
+
+      expect(
+        handler.mock.calls.filter(([event]) => (event as { id: string }).id === "10"),
+      ).toHaveLength(3);
+      expect(onError).toHaveBeenCalledTimes(3);
+      expect(onError).toHaveBeenLastCalledWith(
+        expect.objectContaining({ message: "always fails" }),
+        { operation: "handle", update: poison, poisoned: true },
+      );
+      expect(fake.getUpdates.mock.calls[1]?.[0].offset).toBeUndefined();
+      expect(fake.getUpdates.mock.calls[2]?.[0].offset).toBeUndefined();
+    } finally {
+      await channel.stop();
+    }
+  });
+
   it("does not acknowledge a failed update when a later entry is malformed", async () => {
     const fake = fakeApi();
     const batch = {
@@ -511,6 +556,40 @@ describe("TelegramChannel", () => {
     },
   );
 
+  it("drops a poison webhook update after exhausting handler attempts", async () => {
+    const fake = fakeApi();
+    const poison = textUpdate(25);
+    const handler = vi.fn(async () => {
+      throw new Error("always fails");
+    });
+    const onError = vi.fn();
+    const channel = telegram({
+      api: fake.api,
+      webhook: { secretToken: "webhook_secret" },
+      maxHandlerAttempts: 2,
+      onError,
+    });
+    await channel.start(handler);
+
+    try {
+      await expect(channel.receiveWebhook(poison, "webhook_secret")).rejects.toThrow(
+        "always fails",
+      );
+      // After the final attempt the update is reported and dropped, so this resolves 2xx.
+      await channel.receiveWebhook(poison, "webhook_secret");
+      await channel.receiveWebhook(poison, "webhook_secret");
+
+      expect(handler).toHaveBeenCalledTimes(2);
+      expect(onError).toHaveBeenCalledTimes(2);
+      expect(onError).toHaveBeenLastCalledWith(
+        expect.objectContaining({ message: "always fails" }),
+        { operation: "handle", update: poison, poisoned: true },
+      );
+    } finally {
+      await channel.stop();
+    }
+  });
+
   it("authenticates and dispatches webhook updates", async () => {
     const fake = fakeApi();
     const handler = vi.fn(async () => undefined);
@@ -803,6 +882,9 @@ describe("TelegramChannel", () => {
     ).toEqual([4_096, 1]);
     expect(() => telegram({ api: fake.api, polling: { limit: 101 } })).toThrow(
       "must be an integer between 1 and 100",
+    );
+    expect(() => telegram({ api: fake.api, maxHandlerAttempts: 0 })).toThrow(
+      "maximum handler attempts must be positive",
     );
 
     fake.getUpdates.mockImplementation(waitForAbort);
