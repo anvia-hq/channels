@@ -1,5 +1,14 @@
 # @anvia/telegram
 
+## 0.3.3
+
+### Patch Changes
+
+- 10eaa95: Skip Telegram updates whose handler keeps failing. After `maxHandlerAttempts` failures (default 10, roughly 2.5 minutes of exponentially backed-off polling retries) the update is reported via `onError` with `poisoned: true` and skipped so one bad update no longer stalls delivery. Set `onError` to observe drops; without it, discards are silent.
+- 43bb4f7: Require commands in groups and supergroups to target this bot by default, matching usernames case-insensitively. Keep bare commands in private chats and add `allowBareGroupCommands` to opt into bare group commands. Drop rejected commands instead of forwarding them as ordinary messages so they cannot trigger agent runs through message filters.
+- Updated dependencies [de633dd]
+  - @anvia/channel@0.4.2
+
 ## 0.3.2
 
 ### Patch Changes

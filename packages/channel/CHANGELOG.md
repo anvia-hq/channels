@@ -1,5 +1,11 @@
 # @anvia/channel
 
+## 0.4.2
+
+### Patch Changes
+
+- de633dd: Fix `splitChannelMessage` to attach `replyToMessageId` to the first split part only, so a long reply sends one reply followed by continuations instead of N separate replies. Actions and attachments remain on the last part.
+
 ## 0.4.1
 
 ### Patch Changes
