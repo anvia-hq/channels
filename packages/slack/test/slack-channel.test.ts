@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { sendChannelMessage } from "@anvia/channel";
 import { normalizeSlackMessage, slack } from "../src/index.js";
 import { fakeTransport, slackMessage } from "./helpers.js";
 
@@ -139,6 +140,40 @@ describe("SlackChannel", () => {
     expect(fake.react).toHaveBeenCalledWith("C1", "1700000001.000002", "thumbsup");
     expect(fake.removeReaction).toHaveBeenCalledWith("C1", "1700000001.000002", "thumbsup");
     expect(fake.delete).toHaveBeenCalledWith("C1", "1700000001.000002");
+  });
+
+  it("splits long replies so every part stays in the reply thread", async () => {
+    const fake = fakeTransport();
+    const channel = slack({ transport: fake.transport });
+
+    const parts = channel.splitMessage({
+      text: `${"x".repeat(4_000)} tail`,
+      replyToMessageId: "1700000000.000001",
+    });
+
+    expect(parts).toHaveLength(2);
+    expect(parts.map((part) => part.replyToMessageId)).toEqual([
+      "1700000000.000001",
+      "1700000000.000001",
+    ]);
+
+    await sendChannelMessage({
+      channel,
+      address: { platform: "slack", conversationId: "C1" },
+      message: { text: `${"x".repeat(4_000)} tail`, replyToMessageId: "1700000000.000001" },
+    });
+    expect(fake.send).toHaveBeenNthCalledWith(
+      1,
+      "C1",
+      "1700000000.000001",
+      expect.objectContaining({ replyToMessageId: "1700000000.000001" }),
+    );
+    expect(fake.send).toHaveBeenNthCalledWith(
+      2,
+      "C1",
+      "1700000000.000001",
+      expect.objectContaining({ replyToMessageId: "1700000000.000001" }),
+    );
   });
 
   it("forwards outbound attachments and reply references", async () => {

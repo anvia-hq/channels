@@ -59,6 +59,13 @@ handled updates advance the offset; handler failures are reported and retried. V
 are processed in update-ID order. Malformed entries are reported and skipped only after all valid
 entries in that batch finish, so a later malformed update cannot acknowledge an earlier failure.
 
+Handler retries back off exponentially from `retryDelayMs` (doubling per consecutive failure for
+the same update, capped at 30 seconds). After `maxHandlerAttempts` failures for the same update
+(default 10, roughly 2.5 minutes of consecutive failures), the update is treated as poison:
+it is reported through `onError` with `poisoned: true` and skipped so one bad update cannot stall
+delivery. Set `onError` to observe drops; without it, discards are silent. Configure a lower
+`maxHandlerAttempts` only if dropping updates sooner is acceptable.
+
 Poll failures retry with exponential backoff: `retryDelayMs`, doubling per consecutive failure up
 to 30 seconds, resetting after a successful poll. Telegram rate limits (`429`) wait exactly the
 `retry_after` the API returns instead. `onError` receives `context.errorCode` for Bot API errors,
@@ -88,7 +95,10 @@ return new Response(null, { status: 204 });
 The package does not register the external webhook URL for you. That remains deployment
 configuration because this adapter does not know the application's public route. Concurrent
 redeliveries of one update share the same in-flight handler execution. Return a non-2xx response
-when `receiveWebhook()` rejects so Telegram can retry.
+when `receiveWebhook()` rejects so Telegram can retry. After `maxHandlerAttempts` failed
+deliveries for the same update (default 10), the update is treated as poison: it is reported
+through `onError` with `poisoned: true` and dropped so `receiveWebhook()` resolves and Telegram
+stops retrying it. Set `onError` to observe drops; without it, discards are silent.
 
 Do not provide both `polling` and `webhook` options.
 
@@ -153,6 +163,37 @@ to a shared identity, and Telegram redirects media-group reactions to the group'
 message; use the same chat ID and that message ID for all operations on an album. These limits
 prevent full parity with Discord and Slack's named-reaction removal.
 
+## Commands
+
+A leading `bot_command` entity is normalized as a `command` event when addressed to this bot:
+
+- Private chats accept bare commands such as `/ask`.
+- Groups and supergroups require an explicit `/ask@botname` by default. Username matching ignores
+  case and uses the bot identity returned by `getMe`.
+- Commands addressed to another bot (in any chat), empty targets, and targets that cannot be
+  verified because the bot has no username are dropped.
+- Bare group commands in the default mode are also dropped. They do not fall through as ordinary
+  messages, even when replying to the bot or mentioning it elsewhere, so message filters cannot
+  accidentally start an agent run.
+
+To accept bare commands in groups and supergroups as well, opt in on the adapter:
+
+```ts
+const channel = telegram({
+  token: process.env.TELEGRAM_BOT_TOKEN!,
+  allowBareGroupCommands: true, // Default: false. Multiple bots opting in may respond.
+});
+```
+
+The option applies to polling and webhooks. Custom transports can pass the same option as the
+third argument to `normalizeTelegramUpdate(update, bot, { allowBareGroupCommands: true })`.
+Explicit targets must still match this bot when the option is enabled.
+
+Agent command handling is separately opt-in: pass `commands: true` or command configuration to
+`createChannelAgent({ channel, agent, commands: true })`. Without it, command events are ignored.
+Configure the command menu yourself through BotFather or `setMyCommands`; the adapter does not
+register commands. See [slash commands](channel-agent.md#slash-commands) for per-command handlers.
+
 ## Attachments
 
 Incoming Telegram events expose file IDs as normalized metadata. `channel.loadAttachment()` calls
@@ -207,4 +248,5 @@ await channel.stop();
 ```
 
 Polling shutdown aborts `getUpdates`; webhook shutdown rejects new deliveries and waits for active
-deliveries. Stop the channel-agent service instead when it owns the adapter.
+deliveries. `stop()` also clears pending webhook attempt counts; run it during tests or restarts to
+release that per-update state. Stop the channel-agent service instead when it owns the adapter.

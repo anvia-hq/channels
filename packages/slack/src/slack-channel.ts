@@ -89,7 +89,15 @@ export class SlackChannel implements Channel<SlackSocketEvent> {
   }
 
   splitMessage(message: ChannelMessage): readonly ChannelMessage[] {
-    return splitChannelMessage({ message, maximumLength: MAX_MESSAGE_LENGTH });
+    const parts = splitChannelMessage({ message, maximumLength: MAX_MESSAGE_LENGTH });
+    // Slack routes a message into a thread via thread_ts, which send() derives from
+    // replyToMessageId. Every part of a split reply must carry the reply reference so
+    // continuations land in the same thread instead of the channel top level.
+    const replyToMessageId = message.replyToMessageId;
+    if (replyToMessageId === undefined) return parts;
+    return parts.map((part) =>
+      part.replyToMessageId === undefined ? { ...part, replyToMessageId } : part,
+    );
   }
 
   async loadAttachment(

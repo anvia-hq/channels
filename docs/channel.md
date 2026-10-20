@@ -77,7 +77,8 @@ const messages = await sendChannelMessage({
 });
 ```
 
-Actions and attachments appear on the final split part. Reply metadata remains on every part. A
+Actions and attachments appear on the final split part. The reply reference is attached to the
+first split part only. A
 media-only message uses `text: ""` and at least one attachment.
 
 If a later part fails to send, `sendChannelMessage()` throws `PartialDeliveryError` carrying the
