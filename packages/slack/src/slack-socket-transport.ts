@@ -20,7 +20,7 @@ import type {
   SlackTransportHandler,
 } from "./types.js";
 
-const MAX_REMEMBERED_MESSAGES = 1_000;
+const MAX_REMEMBERED_KEYS = 1_000;
 const DEFAULT_MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024;
 
 type Mutable<T> = { -readonly [Key in keyof T]: T[Key] };
@@ -64,6 +64,7 @@ export class SlackSocketTransport implements SlackTransport {
   private readonly onError: SlackSocketTransportOptions["onError"];
   private readonly maximumAttachmentBytes: number;
   private readonly deliveries = new Set<Promise<void>>();
+  private readonly rememberedEvents = new Set<string>();
   private readonly rememberedMessages = new Set<string>();
   private slackEventListener: ((request: unknown) => void) | undefined;
   private socketErrorListener: ((error: unknown) => void) | undefined;
@@ -247,9 +248,15 @@ export class SlackSocketTransport implements SlackTransport {
             ? parseSlackSocketCommand(request.body, identity)
             : undefined;
     if (event === undefined) return;
-    const key = event.eventId;
-    if (this.rememberedMessages.has(key)) return;
-    remember(this.rememberedMessages, key);
+    const eventKey = `${request.type}:${event.eventId}`;
+    if (this.rememberedEvents.has(eventKey)) return;
+    remember(this.rememberedEvents, eventKey);
+    if (event.type === "message" || event.type === "app_mention") {
+      // Slack can deliver both event types for one message, with different event IDs.
+      const messageKey = `message:${event.teamId}:${event.channelId}:${event.timestamp}`;
+      if (this.rememberedMessages.has(messageKey)) return;
+      remember(this.rememberedMessages, messageKey);
+    }
     await handler(event);
   }
 
@@ -503,7 +510,7 @@ function validateToken(value: string, label: string): void {
 
 function remember(values: Set<string>, value: string): void {
   values.add(value);
-  if (values.size <= MAX_REMEMBERED_MESSAGES) return;
+  if (values.size <= MAX_REMEMBERED_KEYS) return;
   const oldest = values.values().next().value;
   if (oldest !== undefined) values.delete(oldest);
 }
