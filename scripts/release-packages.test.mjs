@@ -10,13 +10,21 @@ function fixture() {
   const published = new Map([[channel.name, { gitHead: "previous-revision" }]]);
   const tags = new Map([["v0.4.0", "previous-revision"]]);
   const releases = new Set();
+  const delays = [];
+  let now = 0;
   let publications = 0;
   return {
     published,
     tags,
     releases,
+    delays,
     publications: () => publications,
     operations: {
+      now: () => now,
+      sleep: async (milliseconds) => {
+        delays.push(milliseconds);
+        now += milliseconds;
+      },
       published: async (pkg) => published.get(pkg.name) ?? null,
       tagCommit: async (tag) => tags.get(tag) ?? null,
       publish: async () => {
@@ -108,11 +116,56 @@ test("registry errors stop preflight and private packages are ignored", async ()
   assert.equal(fake.publications(), 0);
 });
 
-test("missing publication metadata stops tagging rather than implying success", async () => {
+test("visibility timeout stops tagging and a same-run retry recovers without gitHead", async () => {
   const fake = fixture();
+  const recorded = { head, packages: [agent] };
   fake.operations.publish = async () => undefined;
-  await assert.rejects(releasePackages([agent], head, fake.operations), /not visible on npm/);
+  await assert.rejects(
+    releasePackages([agent], head, fake.operations, recorded),
+    /@anvia\/channel-agent@0\.4\.1 is not visible on npm.*re-run the same workflow run.*saved plan/,
+  );
+  assert.equal(
+    fake.delays.reduce((total, delay) => total + delay, 0),
+    120_000,
+  );
   assert.equal(fake.tags.has("@anvia/channel-agent@0.4.1"), false);
+  assert.equal(fake.releases.size, 0);
+  fake.published.set(agent.name, {});
+  fake.operations.publish = async () => assert.fail("must not republish visible versions");
+  await releasePackages([agent], head, fake.operations, recorded);
+  assert.equal(fake.tags.get("@anvia/channel-agent@0.4.1"), head);
+  assert.equal(fake.releases.size, 1);
+});
+
+test("a publication visible at the retry deadline completes tags and releases", async () => {
+  const fake = fixture();
+  const lookup = fake.operations.published;
+  fake.operations.published = async (pkg) => (fake.operations.now() < 120_000 ? null : lookup(pkg));
+  await releasePackages([agent], head, fake.operations);
+  assert.deepEqual(fake.delays, [2_000, 4_000, 8_000, 16_000, 30_000, 30_000, 30_000]);
+  assert.equal(fake.publications(), 1);
+  assert.equal(fake.tags.get("@anvia/channel-agent@0.4.1"), head);
+  assert.equal(fake.releases.size, 1);
+});
+
+test("polling stops as soon as publication is visible", async () => {
+  const fake = fixture();
+  const lookup = fake.operations.published;
+  fake.operations.published = async (pkg) => (fake.operations.now() < 6_000 ? null : lookup(pkg));
+  await releasePackages([agent], head, fake.operations);
+  assert.deepEqual(fake.delays, [2_000, 4_000]);
+  assert.equal(fake.releases.size, 1);
+});
+
+test("registry errors during visibility polling fail immediately", async () => {
+  const fake = fixture();
+  fake.operations.published = async () => {
+    if (fake.publications()) throw new Error("registry unavailable");
+    return null;
+  };
+  await assert.rejects(releasePackages([agent], head, fake.operations), /registry unavailable/);
+  assert.deepEqual(fake.delays, []);
+  assert.equal(fake.releases.size, 0);
 });
 
 test("historical package tags are preserved and checked against npm gitHead", async () => {
@@ -124,13 +177,54 @@ test("historical package tags are preserved and checked against npm gitHead", as
   await assert.rejects(releasePackages([channel], head, fake.operations), /published revision/);
 });
 
-test("publications without gitHead are not attributed to the current revision", async () => {
+test("a fresh dispatch skips visible publications without gitHead or a saved plan", async () => {
   const fake = fixture();
   fake.published.set(agent.name, {});
   const plan = await releasePackages([agent], head, fake.operations);
   assert.deepEqual(plan, []);
   assert.equal(fake.publications(), 0);
   assert.equal(fake.tags.has("@anvia/channel-agent@0.4.1"), false);
+  assert.equal(fake.releases.size, 0);
+});
+
+test("moved main cannot reuse the old plan or claim the old publication on a fresh dispatch", async () => {
+  const fake = fixture();
+  const movedHead = "new-main-revision";
+  fake.published.set(agent.name, { gitHead: head });
+  await assert.rejects(
+    releasePackages([agent], movedHead, fake.operations, { head, packages: [agent] }),
+    /Recorded release plan does not match/,
+  );
+  assert.deepEqual(await releasePackages([agent], movedHead, fake.operations), []);
+  assert.equal(fake.publications(), 0);
+  assert.equal(fake.tags.has("@anvia/channel-agent@0.4.1"), false);
+  assert.equal(fake.releases.size, 0);
+});
+
+test("a recorded plan rejects a visible publication from a conflicting revision", async () => {
+  const fake = fixture();
+  fake.published.set(agent.name, { gitHead: "wrong-revision" });
+  await assert.rejects(
+    releasePackages([agent], head, fake.operations, { head, packages: [agent] }),
+    /was published from a different commit/,
+  );
+  assert.equal(fake.publications(), 0);
+  assert.equal(fake.releases.size, 0);
+});
+
+test("delayed visibility still rejects conflicting publication and tag revisions", async () => {
+  for (const conflict of ["publication", "tag"]) {
+    const fake = fixture();
+    fake.operations.published = async () => {
+      if (fake.operations.now() === 0) return null;
+      if (conflict === "tag") fake.tags.set("@anvia/channel-agent@0.4.1", "wrong-revision");
+      return { gitHead: conflict === "publication" ? "wrong-revision" : head };
+    };
+    await assert.rejects(releasePackages([agent], head, fake.operations), /different commit/);
+    assert.deepEqual(fake.delays, [2_000]);
+    assert.notEqual(fake.tags.get("@anvia/channel-agent@0.4.1"), head);
+    assert.equal(fake.releases.size, 0);
+  }
 });
 
 test("a mixed partial npm success retries only missing versions and tags both packages", async () => {
