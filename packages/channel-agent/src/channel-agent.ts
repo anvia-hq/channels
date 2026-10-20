@@ -356,8 +356,11 @@ export class ChannelAgentService<RawEvent = unknown, Output = string> {
       if (deleteMessage === undefined) {
         throw new Error("Attachment delivery with a placeholder requires channel deletion support");
       }
-      await sendChannelMessage({ channel: this.options.channel, address, message });
-      await deleteMessage.call(this.options.channel, provisional);
+      try {
+        await sendChannelMessage({ channel: this.options.channel, address, message });
+      } finally {
+        await deleteMessage.call(this.options.channel, provisional);
+      }
       return;
     }
     const first = parts[0];
