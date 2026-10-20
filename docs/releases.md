@@ -90,9 +90,18 @@ revision as the `channels-release-plan` artifact before any upload. Reruns resto
 plan and can finish its publications even without `gitHead`. A tag push or GitHub release failure
 can therefore be completed on a retry.
 
-If npm metadata is not yet visible, the workflow stops before tagging; retry after visibility. If
-main has advanced, or the original run's artifact is expired/missing and npm has no `gitHead`, do
-not infer which commit a version came from. Retry attempts without an artifact stop for recovery;
+After publication, each planned version is polled for npm visibility for up to two minutes before
+tagging, with delays starting at two seconds and doubling to a maximum of thirty seconds. Registry
+lookup time counts toward the window; a final in-flight lookup can add up to its thirty-second
+request timeout. Only missing versions (HTTP 404) are retried; other registry errors stop the run.
+If visibility still times out, wait until the version is visible and **re-run the same workflow
+run** so its saved plan is restored. Do not start a fresh dispatch to recover publications without
+`gitHead`: visible versions without a saved plan or matching `gitHead` are skipped.
+
+If main has advanced, the workflow rejects rerunning the old dispatch revision; a fresh dispatch
+does not assign historical publications to the new commit. If the original run's artifact is
+expired/missing and npm has no `gitHead`, do not infer which commit a version came from.
+Retry attempts without an artifact stop for recovery;
 restore verified publication/provenance evidence in a separately reviewed change. A fresh dispatch
 has a different run ID and cannot substitute for a rerun when metadata is absent. Missing historical
 tags are not automatically assigned to a new commit. Never reuse a legacy `v*` tag for

@@ -163,6 +163,37 @@ to a shared identity, and Telegram redirects media-group reactions to the group'
 message; use the same chat ID and that message ID for all operations on an album. These limits
 prevent full parity with Discord and Slack's named-reaction removal.
 
+## Commands
+
+A leading `bot_command` entity is normalized as a `command` event when addressed to this bot:
+
+- Private chats accept bare commands such as `/ask`.
+- Groups and supergroups require an explicit `/ask@botname` by default. Username matching ignores
+  case and uses the bot identity returned by `getMe`.
+- Commands addressed to another bot (in any chat), empty targets, and targets that cannot be
+  verified because the bot has no username are dropped.
+- Bare group commands in the default mode are also dropped. They do not fall through as ordinary
+  messages, even when replying to the bot or mentioning it elsewhere, so message filters cannot
+  accidentally start an agent run.
+
+To accept bare commands in groups and supergroups as well, opt in on the adapter:
+
+```ts
+const channel = telegram({
+  token: process.env.TELEGRAM_BOT_TOKEN!,
+  allowBareGroupCommands: true, // Default: false. Multiple bots opting in may respond.
+});
+```
+
+The option applies to polling and webhooks. Custom transports can pass the same option as the
+third argument to `normalizeTelegramUpdate(update, bot, { allowBareGroupCommands: true })`.
+Explicit targets must still match this bot when the option is enabled.
+
+Agent command handling is separately opt-in: pass `commands: true` or command configuration to
+`createChannelAgent({ channel, agent, commands: true })`. Without it, command events are ignored.
+Configure the command menu yourself through BotFather or `setMyCommands`; the adapter does not
+register commands. See [slash commands](channel-agent.md#slash-commands) for per-command handlers.
+
 ## Attachments
 
 Incoming Telegram events expose file IDs as normalized metadata. `channel.loadAttachment()` calls

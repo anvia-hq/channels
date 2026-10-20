@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { SlackSocketTransport } from "../src/index.js";
-import type { SlackWebClient } from "../src/index.js";
+import type { SlackTransportHandler, SlackWebClient } from "../src/index.js";
 import { slackMessageBody } from "../src/slack-socket-transport.js";
 
 describe("SlackSocketTransport Web API delivery", () => {
@@ -321,6 +321,106 @@ describe("SlackSocketTransport Web API delivery", () => {
     expect(handler).toHaveBeenCalledTimes(2);
   });
 
+  it.each(["message", "app_mention"])(
+    "delivers one message when %s arrives first, including concurrent redeliveries",
+    async (firstType) => {
+      const { receive, handler } = fakeReceiver();
+      const first = messageRequest("Ev1", firstType);
+      const second = messageRequest("Ev2", firstType === "message" ? "app_mention" : "message");
+
+      await Promise.all([receive(first), receive(second), receive(first), receive(second)]);
+
+      expect(handler).toHaveBeenCalledOnce();
+      expect(handler).toHaveBeenCalledWith(expect.objectContaining({ type: firstType }));
+      expect(first.ack).toHaveBeenCalledTimes(2);
+      expect(second.ack).toHaveBeenCalledTimes(2);
+    },
+  );
+
+  it("keeps messages in different teams, channels, and timestamps independent", async () => {
+    const { receive, handler } = fakeReceiver();
+    const messages = [
+      messageRequest("Ev1"),
+      messageRequest("Ev2", "message", "T2"),
+      messageRequest("Ev3", "message", "T1", "C2"),
+      messageRequest("Ev4", "message", "T1", "C1", "1700000000.000002"),
+    ];
+
+    for (const request of messages) {
+      await receive(request);
+      await receive({
+        ...request,
+        body: {
+          ...request.body,
+          event_id: `${request.body.event_id}-mention`,
+          event: { ...request.body.event, type: "app_mention" },
+        },
+      });
+    }
+
+    expect(handler).toHaveBeenCalledTimes(4);
+  });
+
+  it("delivers lifecycle events, commands, and interactions after a message, but not their retries", async () => {
+    const { receive, handler } = fakeReceiver();
+    const message = messageRequest("Ev1");
+    const ts = message.body.event.ts;
+    const events = [
+      { type: "message", subtype: "message_changed", message: { user: "U1", text: "edit", ts } },
+      { type: "message", subtype: "message_deleted", deleted_ts: ts },
+      {
+        type: "reaction_added",
+        user: "U1",
+        reaction: "eyes",
+        item: { type: "message", channel: "C1", ts },
+      },
+    ];
+    const requests = events.map((event, index) => ({
+      ...message,
+      body: {
+        ...message.body,
+        event_id: `EvLifecycle${index}`,
+        event: { channel: "C1", ...event },
+      },
+    }));
+    const command = {
+      type: "slash_commands",
+      ack: vi.fn(async () => {}),
+      body: { command: "/ask", team_id: "T1", channel_id: "C1", user_id: "U1", trigger_id: "Ev1" },
+    };
+    const action = {
+      type: "interactive",
+      ack: vi.fn(async () => {}),
+      body: {
+        type: "block_actions",
+        team: { id: "T1" },
+        channel: { id: "C1" },
+        user: { id: "U1" },
+        message: { ts },
+        trigger_id: "Ev1",
+        actions: [{ value: "anvia:token:approve", action_ts: "1700000001.000001" }],
+      },
+    };
+
+    const nextCommand = { ...command, body: { ...command.body, trigger_id: "trigger-2" } };
+    const nextAction = { ...action, body: { ...action.body, trigger_id: undefined } };
+    for (const request of [message, ...requests, command, nextCommand, action, nextAction]) {
+      await receive(request);
+      await receive(request);
+    }
+
+    expect(handler.mock.calls.map(([event]) => event.type)).toEqual([
+      "message",
+      "message-edited",
+      "message-deleted",
+      "reaction",
+      "command",
+      "command",
+      "action",
+      "action",
+    ]);
+  });
+
   it("delivers a reaction re-added after removal as a distinct event", async () => {
     const transport = new SlackSocketTransport(tokens(), fakeWebClient().web);
     const receive = transport as unknown as {
@@ -444,4 +544,40 @@ function fakeWebClient(): FakeWebClient {
 
 function tokens() {
   return { appToken: "xapp-test", botToken: "xoxb-test" } as const;
+}
+
+function fakeReceiver() {
+  const transport = new SlackSocketTransport(tokens(), fakeWebClient().web);
+  const receiver = transport as unknown as {
+    receive(
+      request: unknown,
+      identity: Readonly<{ teamId: string; botUserId: string }>,
+      handler: SlackTransportHandler,
+    ): Promise<void>;
+  };
+  const handler = vi.fn<SlackTransportHandler>(async () => {});
+  return {
+    handler,
+    receive: (request: unknown) =>
+      receiver.receive(request, { teamId: "T1", botUserId: "U2" }, handler),
+  };
+}
+
+function messageRequest(
+  eventId: string,
+  type = "message",
+  teamId = "T1",
+  channelId = "C1",
+  timestamp = "1700000000.000001",
+) {
+  return {
+    type: "events_api",
+    ack: vi.fn(async () => {}),
+    body: {
+      type: "event_callback",
+      event_id: eventId,
+      team_id: teamId,
+      event: { type, channel: channelId, user: "U1", text: "hello <@U2>", ts: timestamp },
+    },
+  };
 }

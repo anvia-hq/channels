@@ -45,7 +45,8 @@ await channel.send(address, {
 ```
 
 The portable limits are five actions per message, 80 characters per label, and 64 UTF-8 bytes per
-action ID. `splitChannelMessage()` places actions only on the final part of a long message. Custom
+action ID. `splitChannelMessage()` places actions only on the final part of a long message, and
+`replyToMessageId` only on the first part. Custom
 text-only adapters can omit `capabilities`; callers should then use a textual fallback.
 
 Custom adapters implement `splitMessage(message)` in addition to lifecycle and send, plus
@@ -58,8 +59,8 @@ for raw text.
 ## Outbound media and lifecycle operations
 
 `ChannelMessage.attachments` supports images, audio, video, and general files sourced from an HTTPS
-URL or base64 bytes. Attachments and actions stay on the final part of a split message; reply
-metadata is retained on every part. A media-only message uses an empty `text` value.
+URL or base64 bytes. Attachments and actions stay on the final part of a split message; the
+reply reference is attached to the first part only. A media-only message uses an empty `text` value.
 
 Adapters advertise support through `Channel.capabilities`. Reply targets use
 `message.replyToMessageId`; incoming replies expose `event.replyTo`. Optional `edit`, `showTyping`,
