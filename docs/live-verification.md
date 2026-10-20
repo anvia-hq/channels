@@ -52,6 +52,32 @@ pass/fail/blocked result. Replace Not run only with observed evidence, link fail
 and describe omissions. Start with receive → agent → reply on each transport, then command overlap,
 attachments, and recovery. Do not send to real customer conversations.
 
+## 20 October 2026 package release validation
+
+Validated Version Packages candidate `bced98a`, based on reviewed main `e67e80f` after PRs #38–#44.
+The candidate consumes seven changesets and versions only the five public packages:
+
+| Package                | Version |
+| ---------------------- | ------- |
+| `@anvia/channel`       | 0.4.2   |
+| `@anvia/channel-agent` | 0.4.3   |
+| `@anvia/discord`       | 0.3.3   |
+| `@anvia/slack`         | 0.4.1   |
+| `@anvia/telegram`      | 0.3.3   |
+
+- `pnpm install --frozen-lockfile` passed without lockfile changes.
+- `pnpm audit --prod --audit-level high` reported no known vulnerabilities.
+- `pnpm verify:release` passed formatting, lint, typechecking, builds, 303 package tests, and
+  18 offline release-script tests.
+- `pnpm -r pack --dry-run` passed. The five public packages contain built JavaScript, source maps,
+  declarations, package manifests, and README files; no credentials or platform fixtures are listed.
+- The read-only release plan selected exactly these five unpublished versions, with no tag conflicts.
+- GitHub's `npmjs` environment permits `main` and requires reviewer approval. The release workflow
+  is unchanged from successful release run `38904280254`; npm trusted-publisher settings were not
+  independently inspected. Publication authentication will be verified by the release workflow.
+- No live-platform scenarios were run in this validation. The platform matrix above remains
+  unverified; offline checks do not establish live-platform readiness.
+
 ## Publish gate
 
 Use [release and recovery](./releases.md) for trusted publisher configuration, independent package
