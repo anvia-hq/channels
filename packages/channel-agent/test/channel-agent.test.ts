@@ -882,6 +882,90 @@ describe("ChannelAgentService", () => {
     await service.stop();
   });
 
+  it("times out a hung generate and keeps the conversation usable", async () => {
+    vi.useFakeTimers();
+    try {
+      const channel = new FakeChannel();
+      const runSignals: AbortSignal[] = [];
+      const generate = vi.fn((input: ChannelAgentRunInput) => {
+        runSignals.push(input.abortSignal);
+        if (runSignals.length === 1) return new Promise<AgentOutcome<string>>(() => undefined);
+        return Promise.resolve(agentResponse("second done"));
+      });
+      const onError = vi.fn();
+      const service = await serveChannelAgent({
+        channel,
+        agent: fakeAgent({ generate, streaming: false }),
+        streaming: { placeholder: false },
+        runTimeoutMs: 1_000,
+        onError,
+      });
+
+      const firstRun = channel.emit(messageEvent({ id: "1", text: "first" }));
+      await vi.waitFor(() => expect(generate).toHaveBeenCalledOnce());
+      const secondRun = channel.emit(messageEvent({ id: "2", text: "second" }));
+      expect(generate).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(1_000);
+      await firstRun;
+      await secondRun;
+
+      expect(runSignals[0]?.aborted).toBe(true);
+      expect(generate).toHaveBeenCalledTimes(2);
+      expect(onError).toHaveBeenCalledWith(expect.any(Error), {
+        stage: "agent",
+        event: expect.objectContaining({ id: "1" }),
+      });
+      expect(channel.sent.map((item) => item.message.text)).toEqual([
+        "Sorry, I couldn't process that message.",
+        "second done",
+      ]);
+      await service.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("times out a hung stream and resolves stop()", async () => {
+    vi.useFakeTimers();
+    try {
+      const channel = new FakeChannel();
+      const stream = vi.fn<ChannelAgentExecutor["stream"]>(() => ({
+        textStream: (async function* (): AsyncGenerator<string> {
+          await new Promise(() => undefined);
+          yield "never";
+        })(),
+        result: new Promise<AgentOutcome<string>>(() => undefined),
+      }));
+      const service = await serveChannelAgent({
+        channel,
+        agent: fakeAgent({ stream, streaming: true }),
+        streaming: { placeholder: false },
+        runTimeoutMs: 1_000,
+      });
+
+      const run = channel.emit(messageEvent());
+      await vi.waitFor(() => expect(stream).toHaveBeenCalledOnce());
+      const stopping = service.stop();
+      await vi.advanceTimersByTimeAsync(5_000);
+      await stopping;
+      await run;
+
+      expect(channel.stopCount).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("rejects a non-positive run timeout", async () => {
+    const channel = new FakeChannel();
+    const agent = fakeAgent({ streaming: false });
+
+    expect(() => createChannelAgent({ channel, agent, runTimeoutMs: 0 })).toThrow(
+      "run timeout must be a positive integer",
+    );
+  });
+
   it("reports agent failures and replaces the placeholder with an error", async () => {
     const channel = new FakeChannel();
     const error = new Error("model unavailable");

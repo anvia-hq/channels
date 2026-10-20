@@ -39,6 +39,7 @@ import type {
 } from "./types.js";
 
 const DEFAULT_EDIT_INTERVAL_MS = 750;
+const DEFAULT_RUN_TIMEOUT_MS = 5 * 60 * 1_000;
 const DEFAULT_PLACEHOLDER = "Thinking…";
 const DEFAULT_ERROR_MESSAGE = "Sorry, I couldn't process that message.";
 const DEFAULT_EMPTY_RESPONSE_MESSAGE = "I couldn't produce a response.";
@@ -48,6 +49,11 @@ const DEFAULT_EXPIRED_INTERACTION_MESSAGE = "This interaction is no longer activ
 const DEFAULT_CANCEL_KEYWORD = "cancel";
 const DEFAULT_CANCEL_MESSAGE = "Okay, that request was cancelled.";
 const INTERRUPTED_MESSAGE = "(interrupted)";
+const RUN_TIMEOUT_MESSAGE = "Channel agent run timed out";
+
+function timedOutError(): Error {
+  return new Error(RUN_TIMEOUT_MESSAGE);
+}
 
 type ResolvedOptions<RawEvent, Output> = Readonly<{
   channel: ChannelAgentOptions<RawEvent, Output>["channel"];
@@ -61,6 +67,8 @@ type ResolvedOptions<RawEvent, Output> = Readonly<{
     editIntervalMs: number;
     placeholder: string | false;
   }>;
+  /** Maximum time a single agent run (generate, stream, or resume) may execute. */
+  runTimeoutMs: number;
   errorMessage: string | false;
   emptyResponseMessage: string;
   acknowledge: ChannelAgentAcknowledgementOptions | false;
@@ -141,7 +149,9 @@ export class ChannelAgentService<RawEvent = unknown, Output = string> {
 
     if (event.type === "action") {
       if (event.sender.bot) return;
-      await this.queue.run(channelConversationKey(event), () => this.processAction(event, signal));
+      await this.runSerialized(channelConversationKey(event), () =>
+        this.processAction(event, signal),
+      );
       return;
     }
     if (event.type === "command") {
@@ -177,7 +187,7 @@ export class ChannelAgentService<RawEvent = unknown, Output = string> {
           overrides.renderOutcome = (request) => renderOutcome({ ...request, event: commandEvent });
         }
       }
-      await this.queue.run(channelConversationKey(event), () =>
+      await this.runSerialized(channelConversationKey(event), () =>
         this.process(commandAsMessage(event), signal, overrides),
       );
       return;
@@ -193,7 +203,28 @@ export class ChannelAgentService<RawEvent = unknown, Output = string> {
     }
     if (!shouldHandle || signal.aborted) return;
 
-    await this.queue.run(channelConversationKey(event), () => this.process(event, signal));
+    await this.runSerialized(channelConversationKey(event), () => this.process(event, signal));
+  }
+
+  /**
+   * Serializes work per conversation while a hung agent run holds the queue:
+   * the run times out instead of wedging later messages for the conversation
+   * or `stop()`. Detaching moves the queue tail off the abandoned task; the
+   * returned promise still follows the task so channel backpressure is kept.
+   */
+  private async runSerialized(key: string, task: () => Promise<void>): Promise<void> {
+    const detached = this.queue.runDetached(key, task);
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const timer =
+        this.options.runTimeoutMs === Number.POSITIVE_INFINITY
+          ? undefined
+          : setTimeout(() => detached.detach(), this.options.runTimeoutMs);
+      timeout = timer;
+      await detached.finished;
+    } finally {
+      clearTimeout(timeout);
+    }
   }
 
   private async processAction(
@@ -282,11 +313,15 @@ export class ChannelAgentService<RawEvent = unknown, Output = string> {
       };
       if (session !== undefined) input.session = session;
       if (this.options.streaming.enabled) {
-        const streamed = await this.streamOutcome(input, event, provisional);
+        const streamed = await this.runWithTimeout(input.abortSignal, (runSignal) =>
+          this.streamOutcome({ ...input, abortSignal: runSignal }, event, provisional),
+        );
         outcome = streamed.outcome;
         deliveredText = streamed.deliveredText;
       } else {
-        outcome = await this.options.agent.generate(input);
+        outcome = await this.runWithTimeout(input.abortSignal, (runSignal) =>
+          this.options.agent.generate({ ...input, abortSignal: runSignal }),
+        );
       }
     } catch (error) {
       await this.handleFailure(error, "agent", event, provisional, signal);
@@ -303,6 +338,7 @@ export class ChannelAgentService<RawEvent = unknown, Output = string> {
     input: ChannelAgentRunInput,
     event: ChannelMessageEvent<RawEvent>,
     provisional: SentChannelMessage | undefined,
+    signal: AbortSignal = input.abortSignal,
   ): Promise<Readonly<{ outcome: AgentOutcome<Output>; deliveredText: string }>> {
     const stream = this.options.agent.stream(input);
     const result = stream.result;
@@ -314,6 +350,7 @@ export class ChannelAgentService<RawEvent = unknown, Output = string> {
 
     try {
       for await (const delta of stream.textStream) {
+        if (signal.aborted) break;
         text += delta;
         if (provisional === undefined || edit === undefined || text.length === 0) continue;
         const now = Date.now();
@@ -334,7 +371,48 @@ export class ChannelAgentService<RawEvent = unknown, Output = string> {
       throw error;
     }
 
+    if (signal.aborted) {
+      void result.catch(() => undefined);
+      throw timedOutError();
+    }
+
     return { outcome: await result, deliveredText };
+  }
+
+  /**
+   * Bounds a single agent run (generate, stream, or resume) with the
+   * configured execution timeout. On timeout the run's signal aborts so a
+   * cooperative executor settles promptly; the error surfaces through the
+   * standard `agent`-stage reporting path. A hung executor keeps the timeout
+   * error flowing while the queue-level detach lets later messages proceed.
+   */
+  private runWithTimeout<Value>(
+    signal: AbortSignal,
+    run: (runSignal: AbortSignal) => Promise<Value>,
+  ): Promise<Value> {
+    const controller = new AbortController();
+    const onAbort = () => controller.abort(signal.reason);
+    if (signal.aborted) {
+      controller.abort(signal.reason);
+    } else {
+      signal.addEventListener("abort", onAbort, { once: true });
+    }
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout =
+      this.options.runTimeoutMs === Number.POSITIVE_INFINITY
+        ? new Promise<never>(() => undefined)
+        : new Promise<never>((_, reject) => {
+            timer = setTimeout(() => {
+              controller.abort(timedOutError());
+              reject(timedOutError());
+            }, this.options.runTimeoutMs);
+          });
+    const result = run(controller.signal);
+    void result.catch(() => undefined);
+    return Promise.race([result, timeout]).finally(() => {
+      clearTimeout(timer);
+      signal.removeEventListener("abort", onAbort);
+    });
   }
 
   private async deliver(
@@ -573,7 +651,9 @@ export class ChannelAgentService<RawEvent = unknown, Output = string> {
 
     let outcome: AgentOutcome<Output>;
     try {
-      outcome = await resume(claimed.continuation, response, { abortSignal: signal });
+      outcome = await this.runWithTimeout(signal, (runSignal) =>
+        resume(claimed.continuation, response, { abortSignal: runSignal }),
+      );
     } catch (error) {
       await this.restoreInteraction(key, claimed, event);
       await this.handleFailure(error, "agent", event, provisional, signal);
@@ -737,6 +817,13 @@ function resolveOptions<RawEvent, Output>(
   if (emptyResponseMessage.length === 0) {
     throw new TypeError("Channel agent empty response message must not be empty");
   }
+  const runTimeoutMs = options.runTimeoutMs ?? DEFAULT_RUN_TIMEOUT_MS;
+  if (
+    runTimeoutMs !== Number.POSITIVE_INFINITY &&
+    (!Number.isSafeInteger(runTimeoutMs) || runTimeoutMs <= 0)
+  ) {
+    throw new TypeError("Channel agent run timeout must be a positive integer");
+  }
   const interactions = resolveInteractionOptions(options.interactions);
   const multimodal =
     options.multimodal === false ? false : resolveMultimodalOptions(options.multimodal);
@@ -775,6 +862,7 @@ function resolveOptions<RawEvent, Output>(
       editIntervalMs,
       placeholder,
     },
+    runTimeoutMs,
     errorMessage,
     emptyResponseMessage,
     acknowledge,

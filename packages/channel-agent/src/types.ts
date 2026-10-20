@@ -177,6 +177,15 @@ export type ChannelAgentOptions<RawEvent = unknown, Output = string> = Readonly<
   /** Handle platform slash-command events; `false` (default) ignores them. */
   commands?: boolean | ChannelAgentCommandOptions<RawEvent, Output>;
   interactions?: false | ChannelAgentInteractionOptions<RawEvent>;
+  /**
+   * Maximum time a single agent run (generate, stream, or resume) may execute
+   * before it is aborted and reported through `onError` with stage `"agent"`.
+   * The timed-out run no longer blocks later messages in the same conversation
+   * or `stop()`. Defaults to 300_000 (five minutes); `Number.POSITIVE_INFINITY`
+   * disables the bound. Unlike `interactions.timeoutMs`, which only controls
+   * how long a rendered interaction stays resumable, this bounds execution.
+   */
+  runTimeoutMs?: number;
   errorMessage?: string | false;
   emptyResponseMessage?: string;
   onError?: (error: unknown, context: ChannelAgentErrorContext<RawEvent>) => void | Promise<void>;
