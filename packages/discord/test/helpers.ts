@@ -47,6 +47,7 @@ export function fakeGateway(): FakeDiscordGateway {
     unreact,
     async emit(message) {
       if (handler === undefined) throw new Error("Fake Discord gateway is not running");
+
       await handler(message);
     },
   };
@@ -78,7 +79,9 @@ export function discordMessage(
     mentionedBot: true,
     type: "message",
   };
+
   if (overrides.direct !== true) message.guildId = "30";
+
   Object.assign(message, overrides);
   message.type = "message";
   return message;

@@ -7,7 +7,6 @@ export type DiscordGatewayUser = Readonly<{
   bot: boolean;
 }>;
 
-/** Minimal structural view of a chat-input command option, including subcommand nesting. */
 export type DiscordCommandOption = Readonly<{
   name: string;
   value?: unknown;
@@ -63,9 +62,9 @@ export type DiscordGatewayCommand = Readonly<{
   parentChannelId?: string;
   user: DiscordGatewayUser;
   bot: DiscordGatewayUser;
-  /** Application command name without the leading slash, for example "ask" for "/ask". */
+
   name: string;
-  /** Argument text built from the command options; empty when there are none. */
+
   text: string;
   direct: boolean;
   thread: boolean;

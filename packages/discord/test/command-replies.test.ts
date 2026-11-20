@@ -1,4 +1,4 @@
-import { EventEmitter } from "node:events";
+import type { EventEmitter } from "node:events";
 import { Client, Events } from "discord.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DiscordJsGateway } from "../src/index.js";
@@ -122,12 +122,18 @@ describe("Discord deferred command replies", () => {
           await gateway.send(event.channelId, {
             text: "report",
             attachments: [
-              {
-                type: "file",
-                mediaType: "text/plain",
-                ...(mode === "oversized" ? { size: 30 * 1024 * 1024 } : {}),
-                source: { type: "url", url: "https://example.test/report.txt" },
-              },
+              mode === "oversized"
+                ? {
+                    type: "file",
+                    mediaType: "text/plain",
+                    size: 30 * 1024 * 1024,
+                    source: { type: "url", url: "https://example.test/report.txt" },
+                  }
+                : {
+                    type: "file",
+                    mediaType: "text/plain",
+                    source: { type: "url", url: "https://example.test/report.txt" },
+                  },
             ],
           });
         },
@@ -255,7 +261,9 @@ describe("Discord deferred command replies", () => {
       const interaction = command("101");
       interaction.editReply.mockImplementation(async () => {
         await editing.promise;
+
         if (outcome === "failure") throw new Error("late edit failure");
+
         return { id: "77" };
       });
       client.emit(Events.InteractionCreate, interaction);
@@ -268,7 +276,6 @@ describe("Discord deferred command replies", () => {
         stopped = true;
       });
       try {
-        // Give an incorrectly untracked delivery time to finish before releasing the edit.
         await new Promise<void>((resolve) => setImmediate(resolve));
         expect(stopped).toBe(false);
       } finally {
@@ -320,7 +327,9 @@ async function startGateway(
   );
   await gateway.start(handler);
   const client = clients[0];
+
   if (client === undefined) throw new Error("Expected the mocked client to log in");
+
   return { gateway, client: client as unknown as EventEmitter, post, onError };
 }
 

@@ -8,7 +8,8 @@ import type {
   ChannelMessageEvent,
   SentChannelMessage,
 } from "@anvia/channel";
-import { splitChannelMessage, validateChannelMessage } from "@anvia/channel";
+import { splitChannelMessage } from "@anvia/channel";
+import { reportChannelError, validateOutboundChannelMessage } from "@anvia/channel/adapter";
 import { DiscordJsGateway } from "./discord-js-gateway.js";
 import { normalizeDiscordEvent } from "./normalize.js";
 import { validateDiscordSnowflake } from "./snowflake.js";
@@ -66,6 +67,7 @@ export class DiscordChannel implements Channel<DiscordGatewayEvent> {
 
   constructor(options: DiscordChannelOptions) {
     this.onError = options.onError;
+
     if (options.gateway !== undefined && options.gateway !== null) {
       this.gateway = options.gateway;
       return;
@@ -81,13 +83,17 @@ export class DiscordChannel implements Channel<DiscordGatewayEvent> {
       token: options.token,
       onError: (error) => this.reportError(error, { operation: "gateway" }),
     };
+
     if (options.messageContentIntent !== undefined) {
       gatewayOptions.messageContentIntent = options.messageContentIntent;
     }
+
     if (options.fetch !== undefined) gatewayOptions.fetch = options.fetch;
+
     if (options.maximumAttachmentBytes !== undefined) {
       gatewayOptions.maximumAttachmentBytes = options.maximumAttachmentBytes;
     }
+
     this.gateway = new DiscordJsGateway(gatewayOptions);
   }
 
@@ -100,19 +106,25 @@ export class DiscordChannel implements Channel<DiscordGatewayEvent> {
     attachment: ChannelAttachment,
   ): Promise<ChannelAttachmentData> {
     if (event.raw.type !== "message") throw new TypeError("Discord message raw event is invalid");
+
     const source = event.raw.attachments.find((candidate) => candidate.id === attachment.id);
+
     if (source === undefined) throw new Error(`Discord attachment ${attachment.id} is unavailable`);
+
     return { type: "url", url: source.url };
   }
 
   async start(handler: ChannelEventHandler<DiscordGatewayEvent>): Promise<void> {
     if (this.running) throw new Error("Discord channel is already running");
+
     if (typeof handler !== "function") throw new TypeError("Discord event handler is required");
+
     this.running = true;
 
     try {
       await this.gateway.start(async (source) => {
         const event = normalizeDiscordEvent(source);
+
         if (event === undefined || ("sender" in event && event.sender.bot)) return;
 
         try {
@@ -129,6 +141,7 @@ export class DiscordChannel implements Channel<DiscordGatewayEvent> {
 
   async stop(): Promise<void> {
     if (!this.running) return;
+
     this.running = false;
     await this.gateway.stop();
   }
@@ -148,7 +161,9 @@ export class DiscordChannel implements Channel<DiscordGatewayEvent> {
       platform: this.platform,
       conversationId: address.threadId === undefined ? sent.channelId : address.conversationId,
     };
+
     if (address.accountId !== undefined) sentAddress.accountId = address.accountId;
+
     if (address.threadId !== undefined) sentAddress.threadId = sent.channelId;
 
     return {
@@ -161,9 +176,11 @@ export class DiscordChannel implements Channel<DiscordGatewayEvent> {
     validateAddress(sent.address);
     validateDiscordSnowflake(sent.id, "Discord message ID");
     validateMessage(message);
+
     if (message.replyToMessageId !== undefined) {
       throw new TypeError("Discord reply targets cannot be edited");
     }
+
     await this.gateway.edit(sent.address.threadId ?? sent.address.conversationId, sent.id, message);
   }
 
@@ -179,9 +196,11 @@ export class DiscordChannel implements Channel<DiscordGatewayEvent> {
 
   async react(sent: SentChannelMessage, reaction: string): Promise<void> {
     validateSentMessage(sent);
+
     if (typeof reaction !== "string" || reaction.length === 0) {
       throw new TypeError("Discord reaction must not be empty");
     }
+
     await this.gateway.react(
       sent.address.threadId ?? sent.address.conversationId,
       sent.id,
@@ -191,9 +210,11 @@ export class DiscordChannel implements Channel<DiscordGatewayEvent> {
 
   async unreact(sent: SentChannelMessage, reaction: string): Promise<void> {
     validateSentMessage(sent);
+
     if (typeof reaction !== "string" || reaction.length === 0) {
       throw new TypeError("Discord reaction must not be empty");
     }
+
     await this.gateway.unreact(
       sent.address.threadId ?? sent.address.conversationId,
       sent.id,
@@ -201,12 +222,8 @@ export class DiscordChannel implements Channel<DiscordGatewayEvent> {
     );
   }
 
-  private async reportError(error: unknown, context: DiscordChannelErrorContext): Promise<void> {
-    try {
-      await this.onError?.(error, context);
-    } catch {
-      // Error observers must not terminate message delivery.
-    }
+  private reportError(error: unknown, context: DiscordChannelErrorContext): Promise<void> {
+    return reportChannelError(this.onError, error, context);
   }
 }
 
@@ -214,23 +231,20 @@ function validateAddress(address: ChannelAddress): void {
   if (address.platform !== "discord") {
     throw new TypeError(`Discord channel cannot use a ${address.platform} address`);
   }
+
   validateDiscordSnowflake(address.conversationId, "Discord conversation ID");
+
   if (address.threadId !== undefined) {
     validateDiscordSnowflake(address.threadId, "Discord thread ID");
   }
 }
 
 function validateMessage(message: ChannelMessage): void {
-  if (
-    typeof message.text !== "string" ||
-    (message.text.length === 0 && message.attachments === undefined)
-  ) {
-    throw new TypeError("Discord message must include text or attachments");
-  }
-  if (message.text.length > MAX_MESSAGE_LENGTH) {
-    throw new RangeError(`Discord message text must not exceed ${MAX_MESSAGE_LENGTH} characters`);
-  }
-  validateChannelMessage(message);
+  validateOutboundChannelMessage(message, {
+    platformLabel: "Discord",
+    maximumLength: MAX_MESSAGE_LENGTH,
+  });
+
   if (message.replyToMessageId !== undefined) {
     validateDiscordSnowflake(message.replyToMessageId, "Discord reply message ID");
   }
