@@ -38,6 +38,7 @@ export async function createApplication(
         if (stopPromise !== undefined) {
           throw new Error("Discord agent application is already stopped");
         }
+
         await channelAgent.start();
       },
       stop() {

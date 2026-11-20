@@ -36,6 +36,7 @@ export async function createApplication(config: SlackAgentConfig): Promise<Slack
         if (stopPromise !== undefined) {
           throw new Error("Slack agent application is already stopped");
         }
+
         await channelAgent.start();
       },
       stop() {

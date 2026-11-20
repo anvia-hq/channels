@@ -4,6 +4,7 @@ import type { DiscordAgentConfig } from "./types.js";
 
 export function createModel(config: DiscordAgentConfig): CompletionModel {
   let openAi: OpenAIClient;
+
   if (config.openAiBaseUrl === undefined) {
     openAi = new OpenAIClient({ apiKey: config.openAiApiKey });
   } else {
