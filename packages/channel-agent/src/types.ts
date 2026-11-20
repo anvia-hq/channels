@@ -54,30 +54,20 @@ export type ChannelAgentMultimodalOptions = Readonly<{
   attachmentConcurrency?: number;
 }>;
 
-/**
- * Handling for platform slash-command events (`/ask …`). When enabled, an accepted
- * command runs the agent with the prompt `/<name> <text>`; bot-authored commands
- * are always ignored.
- */
-/**
- * Per-command overrides for a named slash command. Every field is optional;
- * anything omitted falls back to the shared channel-agent behaviour.
- */
 export type ChannelAgentCommandHandler<RawEvent = unknown, Output = string> = Readonly<{
-  /** Extra routing filter for this command name, in addition to the shared filter. */
   shouldHandle?: (event: ChannelCommandEvent<RawEvent>) => boolean | Promise<boolean>;
-  /** Prompt override; by default accepted commands prompt with `/<name> <text>`. */
+
   createPrompt?: (
     request: Readonly<{
       event: ChannelCommandEvent<RawEvent>;
       context: ChannelAgentPromptContext<RawEvent>;
     }>,
   ) => AgentPrompt | Promise<AgentPrompt>;
-  /** Session override; returning `undefined` runs the command without memory. */
+
   createSession?: (
     event: ChannelCommandEvent<RawEvent>,
   ) => MemoryScope | undefined | Promise<MemoryScope | undefined>;
-  /** Outcome renderer override for this command's responses. */
+
   renderOutcome?: (
     request: Readonly<{
       outcome: AgentOutcome<Output>;
@@ -87,9 +77,8 @@ export type ChannelAgentCommandHandler<RawEvent = unknown, Output = string> = Re
 }>;
 
 export type ChannelAgentCommandOptions<RawEvent = unknown, Output = string> = Readonly<{
-  /** Decide which commands are handled; by default every user command is handled. */
   shouldHandle?: (event: ChannelCommandEvent<RawEvent>) => boolean | Promise<boolean>;
-  /** Per-command overrides keyed by command name without the leading slash. */
+
   commands?: Readonly<Record<string, ChannelAgentCommandHandler<RawEvent, Output>>>;
 }>;
 
@@ -103,21 +92,11 @@ export type ChannelAgentErrorContext<RawEvent = unknown> = Readonly<{
   event: ChannelEvent<RawEvent>;
 }>;
 
-/**
- * Reaction cues applied to an incoming message while the agent works on it.
- * Both reactions require `channel.capabilities.reactions` and `channel.react`;
- * the completion reaction is added only after a final response is delivered.
- */
 export type ChannelAgentAcknowledgementOptions = Readonly<{
-  /** Reaction added to the incoming message as soon as the service accepts it. */
   reaction: string;
-  /** Optional reaction added to the same message once a final response is delivered. */
+
   completeReaction?: string;
-  /**
-   * Whether the acceptance reaction is removed when the response is delivered
-   * and the channel supports reaction removals. Defaults to `true` when a
-   * `completeReaction` is configured.
-   */
+
   clearOnCompletion?: boolean;
 }>;
 
@@ -143,11 +122,11 @@ export type ChannelAgentInteractionOptions<RawEvent = unknown> = Readonly<{
   ) => AgentInteractionResponse | undefined | Promise<AgentInteractionResponse | undefined>;
   invalidResponseMessage?: string;
   expiredInteractionMessage?: string;
-  /** Maximum time a rendered interaction stays resumable; unset means it never expires. */
+
   timeoutMs?: number;
-  /** Keyword that abandons a pending interaction; false disables the escape hatch. */
+
   cancelKeyword?: string | false;
-  /** Reply sent after a successful cancel; false suppresses the reply. */
+
   cancelMessage?: string | false;
 }>;
 
@@ -172,19 +151,12 @@ export type ChannelAgentOptions<RawEvent = unknown, Output = string> = Readonly<
   ) => string | ChannelMessage | Promise<string | ChannelMessage>;
   streaming?: ChannelAgentStreamingOptions;
   multimodal?: false | ChannelAgentMultimodalOptions;
-  /** Shorthand for `acknowledge: { reaction }`; `false` or `undefined` disables acknowledgements. */
+
   acknowledge?: string | false | ChannelAgentAcknowledgementOptions;
-  /** Handle platform slash-command events; `false` (default) ignores them. */
+
   commands?: boolean | ChannelAgentCommandOptions<RawEvent, Output>;
   interactions?: false | ChannelAgentInteractionOptions<RawEvent>;
-  /**
-   * Maximum time a single agent run (generate, stream, or resume) may execute
-   * before it is aborted and reported through `onError` with stage `"agent"`.
-   * The timed-out run no longer blocks later messages in the same conversation
-   * or `stop()`. Defaults to 300_000 (five minutes); `Number.POSITIVE_INFINITY`
-   * disables the bound. Unlike `interactions.timeoutMs`, which only controls
-   * how long a rendered interaction stays resumable, this bounds execution.
-   */
+
   runTimeoutMs?: number;
   errorMessage?: string | false;
   emptyResponseMessage?: string;

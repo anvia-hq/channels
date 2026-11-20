@@ -361,6 +361,7 @@ describe("ChannelAgentService", () => {
 
     await channel.emit(messageEvent());
     const approve = channel.sent[0]?.message.actions?.find((action) => action.label === "Approve");
+
     if (approve === undefined) throw new Error("Expected a native approval action");
 
     await channel.emit(actionEvent(approve.id));
@@ -505,7 +506,7 @@ describe("ChannelAgentService", () => {
     await vi.waitFor(() => expect(resume).toHaveBeenCalledOnce());
     const queuedAction = channel.emit(actionEvent("queued-action"));
     const stopping = service.stop();
-    // The adapter still receives events while draining, but no new work may start.
+
     await channel.emit(
       messageEvent({ id: "event-4", conversation: { id: "chat-2", kind: "direct" } }),
     );
@@ -518,6 +519,7 @@ describe("ChannelAgentService", () => {
     expect(store.get(channelInteractionKey(event))?.continuation.sourceRunId).toBe("run-2");
     expect(channel.sent).toHaveLength(2);
     const approve = channel.sent[1]?.message.actions?.find((action) => action.label === "Approve");
+
     if (approve === undefined) throw new Error("Expected a delivered follow-up approval action");
 
     await service.start();
@@ -557,6 +559,7 @@ describe("ChannelAgentService", () => {
       const approve = channel.edits[0]?.message.actions?.find(
         (action) => action.label === "Approve",
       );
+
       if (approve === undefined) throw new Error("Expected an approval action");
 
       const reply = channel.emit(
@@ -599,7 +602,9 @@ describe("ChannelAgentService", () => {
       const run = channel.emit(event);
       await vi.waitFor(() => expect(render).toHaveBeenCalledOnce());
       const stopping = service.stop();
+
       if (deliveryFails) vi.spyOn(channel, "send").mockRejectedValueOnce(new Error("send failed"));
+
       rendered.resolve("Approve sending the email?");
       await Promise.all([run, stopping]);
 
@@ -850,7 +855,9 @@ describe("ChannelAgentService", () => {
     ]);
     const generate = vi.fn((input: ChannelAgentRunInput) => {
       const pending = outcomes.get(String(input.prompt));
+
       if (pending === undefined) throw new Error("Unexpected prompt");
+
       return pending.promise;
     });
     const service = await serveChannelAgent({
@@ -889,7 +896,9 @@ describe("ChannelAgentService", () => {
       const runSignals: AbortSignal[] = [];
       const generate = vi.fn((input: ChannelAgentRunInput) => {
         runSignals.push(input.abortSignal);
+
         if (runSignals.length === 1) return new Promise<AgentOutcome<string>>(() => undefined);
+
         return Promise.resolve(agentResponse("second done"));
       });
       const onError = vi.fn();
@@ -988,12 +997,13 @@ describe("ChannelAgentService", () => {
       const secondGate = deferred<void>();
       const generate = vi.fn((input: ChannelAgentRunInput) => {
         const text = String(input.prompt);
+
         if (text === "third") {
-          // The third message must not start before the second has settled.
           expect(settled).toEqual(["first", "second"]);
           settled.push(text);
           return Promise.resolve(agentResponse(`${text} done`));
         }
+
         started.push(text);
         const gate = text === "first" ? firstGate.promise : secondGate.promise;
         return gate.then(() => {
@@ -1009,14 +1019,11 @@ describe("ChannelAgentService", () => {
       });
 
       const firstRun = channel.emit(messageEvent({ id: "1", text: "first" }));
-      // Queue the second message behind the first before it settles.
+
       await vi.waitFor(() => expect(generate).toHaveBeenCalledTimes(1));
       const secondRun = channel.emit(messageEvent({ id: "2", text: "second" }));
       const thirdRun = channel.emit(messageEvent({ id: "3", text: "third" }));
 
-      // Let the first run hold the queue past the detach timeout, then settle
-      // both queued runs without advancing far enough to detach either of them
-      // from their own start.
       await vi.advanceTimersByTimeAsync(500);
       firstGate.resolve();
       await firstRun;

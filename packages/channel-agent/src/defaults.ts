@@ -39,7 +39,9 @@ function channelSessionMetadata(event: ChannelMessageEvent): JsonObject {
     conversationId: event.conversation.id,
     conversationKind: event.conversation.kind,
   };
+
   if (event.accountId !== undefined) metadata.accountId = event.accountId;
+
   if (event.conversation.threadId !== undefined) {
     metadata.threadId = event.conversation.threadId;
   }
@@ -53,6 +55,7 @@ function encode(value: string): string {
 
 function optionalIdentifier(value: string | undefined, missing: string): string {
   if (value === undefined) return missing;
+
   const encoded = encode(value);
   return encoded === missing || encoded.startsWith("~") ? `~${encoded}` : encoded;
 }

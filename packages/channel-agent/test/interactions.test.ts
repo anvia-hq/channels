@@ -12,7 +12,9 @@ import { actionEvent, agentApproval, messageEvent } from "./helpers.js";
 describe("channel agent interactions", () => {
   it("renders and parses approval interactions", () => {
     const outcome = agentApproval();
+
     if (outcome.type !== "interaction") throw new Error("Expected an interaction outcome");
+
     const pending = { continuation: outcome.continuation, interaction: outcome.interaction };
 
     expect(renderChannelAgentInteraction({ pending })).toContain(
@@ -35,7 +37,9 @@ describe("channel agent interactions", () => {
 
   it("maps opaque native action IDs to interaction responses", () => {
     const outcome = agentApproval();
+
     if (outcome.type !== "interaction") throw new Error("Expected an interaction outcome");
+
     const pending = {
       continuation: outcome.continuation,
       interaction: outcome.interaction,
@@ -43,6 +47,7 @@ describe("channel agent interactions", () => {
     };
     const actions = channelInteractionActions(pending);
     const approve = actions?.find((action) => action.label === "Approve");
+
     if (approve === undefined) throw new Error("Expected an approval action");
 
     expect(parseChannelAgentActionResponse({ event: actionEvent(approve.id), pending })).toEqual({
@@ -59,9 +64,11 @@ describe("channel agent interactions", () => {
 
   it("redacts sensitive approval input and bounds its preview", () => {
     const outcome = agentApproval();
+
     if (outcome.type !== "interaction" || outcome.interaction.type !== "tool-approval") {
       throw new Error("Expected an approval interaction outcome");
     }
+
     const pending = {
       continuation: outcome.continuation,
       interaction: {
@@ -70,6 +77,7 @@ describe("channel agent interactions", () => {
           recipient: "person@example.com",
           apiKey: "do-not-render",
           nested: { password: "also-secret" },
+          summary: "Authorization: Bearer super-secret-jwt-value and sk-1234567890abcdef",
           notes: "x".repeat(2_000),
           tailMarker: "must-not-fit",
         },
@@ -81,9 +89,12 @@ describe("channel agent interactions", () => {
     expect(rendered).toContain('"recipient": "person@example.com"');
     expect(rendered).toContain('"apiKey": "[redacted]"');
     expect(rendered).toContain('"password": "[redacted]"');
+    expect(rendered).toContain('"summary": "Authorization: [redacted] and [redacted]"');
     expect(rendered).toContain("… [truncated]");
     expect(rendered).not.toContain("do-not-render");
     expect(rendered).not.toContain("also-secret");
+    expect(rendered).not.toContain("super-secret-jwt-value");
+    expect(rendered).not.toContain("sk-1234567890abcdef");
     expect(rendered).not.toContain("must-not-fit");
   });
 
@@ -184,7 +195,9 @@ describe("channel agent interactions", () => {
 
   it("atomically takes only the expected pending interaction", () => {
     const outcome = agentApproval();
+
     if (outcome.type !== "interaction") throw new Error("Expected an interaction outcome");
+
     const pending = { continuation: outcome.continuation, interaction: outcome.interaction };
     const store = new MemoryChannelAgentInteractionStore();
     store.set("key", pending);

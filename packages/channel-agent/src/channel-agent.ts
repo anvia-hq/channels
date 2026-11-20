@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { AgentOutcome, AgentPrompt, MemoryScope } from "@anvia/core";
 import type { AgentInteractionResponse } from "@anvia/core/agent/interactions";
-import { sendChannelMessage } from "@anvia/channel";
+import { reportChannelError } from "@anvia/channel/adapter";
 import type {
   ChannelActionEvent,
   ChannelAddress,
@@ -11,92 +11,25 @@ import type {
   ChannelMessageEvent,
   SentChannelMessage,
 } from "@anvia/channel";
+import { channelConversationKey } from "./defaults.js";
 import {
-  channelConversationKey,
-  defaultChannelAgentSession,
-  defaultShouldHandleChannelEvent,
-} from "./defaults.js";
-import { KeyedQueue } from "./keyed-queue.js";
-import {
-  MemoryChannelAgentInteractionStore,
-  channelInteractionActions,
-  channelInteractionKey,
-  parseChannelAgentActionResponse,
-  parseChannelAgentInteractionResponse,
-  renderChannelAgentInteraction,
-} from "./interactions.js";
+  cleanupPlaceholder,
+  deliverChannelResponse,
+  reactToEvent,
+  sendPlaceholder,
+  unreactFromEvent,
+} from "./delivery.js";
+import { runWithTimeout, streamAgentOutcome } from "./execution.js";
+import { channelInteractionActions, channelInteractionKey } from "./interactions.js";
 import type { PendingChannelAgentInteraction } from "./interactions.js";
-import { channelMessagePrompt, resolveMultimodalOptions } from "./prompts.js";
+import { KeyedQueue } from "./keyed-queue.js";
+import { commandAsMessage, eventAddress, resolveOptions, responseMessage } from "./options.js";
+import type { CommandOverrides, ResolvedChannelAgentOptions } from "./options.js";
 import type {
-  ChannelAgentAcknowledgementOptions,
   ChannelAgentCommandHandler,
-  ChannelAgentCommandOptions,
   ChannelAgentErrorContext,
-  ChannelAgentInteractionOptions,
   ChannelAgentOptions,
-  ChannelAgentPromptContext,
-  ChannelAgentRunInput,
 } from "./types.js";
-
-const DEFAULT_EDIT_INTERVAL_MS = 750;
-const DEFAULT_RUN_TIMEOUT_MS = 5 * 60 * 1_000;
-/** Largest delay `setTimeout` honors without clamping to 1 ms. */
-const MAX_TIMEOUT_MS = 2_147_483_647;
-const DEFAULT_PLACEHOLDER = "Thinking…";
-const DEFAULT_ERROR_MESSAGE = "Sorry, I couldn't process that message.";
-const DEFAULT_EMPTY_RESPONSE_MESSAGE = "I couldn't produce a response.";
-const DEFAULT_INVALID_INTERACTION_RESPONSE_MESSAGE =
-  "I couldn't understand that response. Please follow the requested format.";
-const DEFAULT_EXPIRED_INTERACTION_MESSAGE = "This interaction is no longer active.";
-const DEFAULT_CANCEL_KEYWORD = "cancel";
-const DEFAULT_CANCEL_MESSAGE = "Okay, that request was cancelled.";
-const INTERRUPTED_MESSAGE = "(interrupted)";
-const RUN_TIMEOUT_MESSAGE = "Channel agent run timed out";
-
-function timedOutError(): Error {
-  return new Error(RUN_TIMEOUT_MESSAGE);
-}
-
-type ResolvedOptions<RawEvent, Output> = Readonly<{
-  channel: ChannelAgentOptions<RawEvent, Output>["channel"];
-  agent: ChannelAgentOptions<RawEvent, Output>["agent"];
-  shouldHandle: NonNullable<ChannelAgentOptions<RawEvent, Output>["shouldHandle"]>;
-  createPrompt: NonNullable<ChannelAgentOptions<RawEvent, Output>["createPrompt"]>;
-  createSession: NonNullable<ChannelAgentOptions<RawEvent, Output>["createSession"]>;
-  renderOutcome: NonNullable<ChannelAgentOptions<RawEvent, Output>["renderOutcome"]>;
-  streaming: Readonly<{
-    enabled: boolean;
-    editIntervalMs: number;
-    placeholder: string | false;
-  }>;
-  /** Maximum time a single agent run (generate, stream, or resume) may execute. */
-  runTimeoutMs: number;
-  errorMessage: string | false;
-  emptyResponseMessage: string;
-  acknowledge: ChannelAgentAcknowledgementOptions | false;
-  commands:
-    | false
-    | Readonly<{
-        shouldHandle: NonNullable<ChannelAgentCommandOptions<RawEvent>["shouldHandle"]>;
-        commands: Readonly<
-          Record<string, ChannelAgentCommandHandler<RawEvent, Output> | undefined>
-        >;
-      }>;
-  interactions:
-    | false
-    | Readonly<{
-        store: NonNullable<ChannelAgentInteractionOptions<RawEvent>["store"]>;
-        render: NonNullable<ChannelAgentInteractionOptions<RawEvent>["render"]>;
-        parseResponse: NonNullable<ChannelAgentInteractionOptions<RawEvent>["parseResponse"]>;
-        parseAction: NonNullable<ChannelAgentInteractionOptions<RawEvent>["parseAction"]>;
-        invalidResponseMessage: string;
-        expiredInteractionMessage: string;
-        timeoutMs: number | undefined;
-        cancelKeyword: string | false;
-        cancelMessage: string | false;
-      }>;
-  onError: ChannelAgentOptions<RawEvent, Output>["onError"];
-}>;
 
 export function createChannelAgent<RawEvent = unknown, Output = string>(
   options: ChannelAgentOptions<RawEvent, Output>,
@@ -113,7 +46,7 @@ export async function serveChannelAgent<RawEvent = unknown, Output = string>(
 }
 
 export class ChannelAgentService<RawEvent = unknown, Output = string> {
-  private readonly options: ResolvedOptions<RawEvent, Output>;
+  private readonly options: ResolvedChannelAgentOptions<RawEvent, Output>;
   private readonly queue = new KeyedQueue();
   private controller: AbortController | undefined;
 
@@ -123,22 +56,25 @@ export class ChannelAgentService<RawEvent = unknown, Output = string> {
 
   async start(): Promise<void> {
     if (this.controller !== undefined) throw new Error("Channel agent is already running");
+
     const controller = new AbortController();
     this.controller = controller;
     try {
       await this.options.channel.start((event) => this.accept(event, controller.signal));
     } catch (error) {
       if (this.controller === controller) this.controller = undefined;
+
       throw error;
     }
   }
 
   async stop(): Promise<void> {
     const controller = this.controller;
+
     if (controller === undefined) return;
+
     controller.abort();
     try {
-      // Keep delivery available until outcomes and placeholder cleanup finish.
       await this.queue.drain();
       await this.options.channel.stop();
     } finally {
@@ -151,47 +87,16 @@ export class ChannelAgentService<RawEvent = unknown, Output = string> {
 
     if (event.type === "action") {
       if (event.sender.bot) return;
+
       await this.queue.run(channelConversationKey(event), () => this.processAction(event, signal));
       return;
     }
+
     if (event.type === "command") {
-      if (event.sender.bot) return;
-      const commands = this.options.commands;
-      if (commands === false) return;
-      const handler = commands.commands[event.name];
-      const commandEvent = event;
-      let shouldHandle: boolean;
-      try {
-        shouldHandle = await commands.shouldHandle(event);
-        if (shouldHandle && handler?.shouldHandle !== undefined) {
-          shouldHandle = await handler.shouldHandle(event);
-        }
-      } catch (error) {
-        await this.reportError(error, { stage: "filter", event });
-        return;
-      }
-      if (!shouldHandle || signal.aborted) return;
-      let overrides: CommandOverrides<RawEvent, Output> | undefined;
-      if (handler !== undefined) {
-        overrides = {};
-        if (handler.createPrompt !== undefined) {
-          const createPrompt = handler.createPrompt;
-          overrides.createPrompt = (request) => createPrompt({ ...request, event: commandEvent });
-        }
-        if (handler.createSession !== undefined) {
-          const createSession = handler.createSession;
-          overrides.createSession = () => createSession(commandEvent);
-        }
-        if (handler.renderOutcome !== undefined) {
-          const renderOutcome = handler.renderOutcome;
-          overrides.renderOutcome = (request) => renderOutcome({ ...request, event: commandEvent });
-        }
-      }
-      await this.queue.run(channelConversationKey(event), () =>
-        this.process(commandAsMessage(event), signal, overrides),
-      );
+      await this.acceptCommand(event, signal);
       return;
     }
+
     if (event.type !== "message") return;
 
     let shouldHandle: boolean;
@@ -201,9 +106,41 @@ export class ChannelAgentService<RawEvent = unknown, Output = string> {
       await this.reportError(error, { stage: "filter", event });
       return;
     }
+
     if (!shouldHandle || signal.aborted) return;
 
     await this.queue.run(channelConversationKey(event), () => this.process(event, signal));
+  }
+
+  private async acceptCommand(
+    event: ChannelCommandEvent<RawEvent>,
+    signal: AbortSignal,
+  ): Promise<void> {
+    if (event.sender.bot) return;
+
+    const commands = this.options.commands;
+
+    if (commands === false) return;
+
+    const handler = commands.commands[event.name];
+    let shouldHandle: boolean;
+    try {
+      shouldHandle = await commands.shouldHandle(event);
+
+      if (shouldHandle && handler?.shouldHandle !== undefined) {
+        shouldHandle = await handler.shouldHandle(event);
+      }
+    } catch (error) {
+      await this.reportError(error, { stage: "filter", event });
+      return;
+    }
+
+    if (!shouldHandle || signal.aborted) return;
+
+    const overrides = commandOverrides(handler, event);
+    await this.queue.run(channelConversationKey(event), () =>
+      this.process(commandAsMessage(event), signal, overrides),
+    );
   }
 
   private async processAction(
@@ -211,7 +148,9 @@ export class ChannelAgentService<RawEvent = unknown, Output = string> {
     signal: AbortSignal,
   ): Promise<void> {
     const interactions = this.options.interactions;
+
     if (interactions === false || signal.aborted) return;
+
     let pending: PendingChannelAgentInteraction | undefined;
     try {
       pending = await interactions.store.get(channelInteractionKey(event));
@@ -219,10 +158,12 @@ export class ChannelAgentService<RawEvent = unknown, Output = string> {
       await this.handleFailure(error, "interaction", event, undefined, signal);
       return;
     }
+
     if (pending === undefined) {
       await this.deliverInteractionNotice(event, interactions.expiredInteractionMessage);
       return;
     }
+
     let response: AgentInteractionResponse | undefined;
     try {
       response = await interactions.parseAction({ event, pending });
@@ -230,10 +171,12 @@ export class ChannelAgentService<RawEvent = unknown, Output = string> {
       await this.handleFailure(error, "interaction", event, undefined, signal);
       return;
     }
+
     if (response === undefined) {
       await this.deliverInteractionNotice(event, interactions.expiredInteractionMessage);
       return;
     }
+
     await this.resumeInteraction(event, pending, response, signal);
   }
 
@@ -247,6 +190,7 @@ export class ChannelAgentService<RawEvent = unknown, Output = string> {
     await this.acknowledgeEvent(event, signal);
 
     let pending: PendingChannelAgentInteraction | undefined;
+
     if (this.options.interactions !== false) {
       try {
         pending = await this.options.interactions.store.get(channelInteractionKey(event));
@@ -255,6 +199,7 @@ export class ChannelAgentService<RawEvent = unknown, Output = string> {
         return;
       }
     }
+
     if (pending !== undefined) {
       await this.processInteractionResponse(event, pending, signal);
       return;
@@ -276,7 +221,8 @@ export class ChannelAgentService<RawEvent = unknown, Output = string> {
     }
 
     const address = eventAddress(event);
-    const provisional = await this.sendPlaceholder(address, event);
+    const provisional = await this.createPlaceholder(address, event);
+
     if (provisional === null) return;
 
     let outcome: AgentOutcome<Output>;
@@ -290,15 +236,25 @@ export class ChannelAgentService<RawEvent = unknown, Output = string> {
         prompt,
         abortSignal: signal,
       };
+
       if (session !== undefined) input.session = session;
+
       if (this.options.streaming.enabled) {
-        const streamed = await this.runWithTimeout(input.abortSignal, (runSignal) =>
-          this.streamOutcome({ ...input, abortSignal: runSignal }, event, provisional),
+        const streamed = await runWithTimeout(signal, this.options.runTimeoutMs, (runSignal) =>
+          streamAgentOutcome({
+            agent: this.options.agent,
+            channel: this.options.channel,
+            input: { ...input, abortSignal: runSignal },
+            event,
+            provisional,
+            editIntervalMs: this.options.streaming.editIntervalMs,
+            onDeliveryError: (error) => this.reportError(error, { stage: "delivery", event }),
+          }),
         );
         outcome = streamed.outcome;
         deliveredText = streamed.deliveredText;
       } else {
-        outcome = await this.runWithTimeout(input.abortSignal, (runSignal) =>
+        outcome = await runWithTimeout(signal, this.options.runTimeoutMs, (runSignal) =>
           this.options.agent.generate({ ...input, abortSignal: runSignal }),
         );
       }
@@ -306,142 +262,13 @@ export class ChannelAgentService<RawEvent = unknown, Output = string> {
       await this.handleFailure(error, "agent", event, provisional, signal);
       return;
     }
+
     if (signal.aborted) {
-      await this.cleanupPlaceholder(provisional);
+      await cleanupPlaceholder(this.options.channel, provisional);
       return;
     }
+
     await this.completeOutcome(outcome, event, provisional, signal, deliveredText, overrides);
-  }
-
-  private async streamOutcome(
-    input: ChannelAgentRunInput,
-    event: ChannelMessageEvent<RawEvent>,
-    provisional: SentChannelMessage | undefined,
-    signal: AbortSignal = input.abortSignal,
-  ): Promise<Readonly<{ outcome: AgentOutcome<Output>; deliveredText: string }>> {
-    const stream = this.options.agent.stream(input);
-    const result = stream.result;
-    void result.catch(() => undefined);
-    let text = "";
-    let deliveredText = "";
-    let lastEditAt = Date.now();
-    const edit = this.options.channel.edit;
-
-    try {
-      for await (const delta of stream.textStream) {
-        if (signal.aborted) break;
-        text += delta;
-        if (provisional === undefined || edit === undefined || text.length === 0) continue;
-        const now = Date.now();
-        if (now - lastEditAt < this.options.streaming.editIntervalMs) continue;
-        const firstPart = this.messageParts({ text })[0];
-        if (firstPart === undefined || firstPart.text === deliveredText) continue;
-        try {
-          await edit.call(this.options.channel, provisional, firstPart);
-          deliveredText = firstPart.text;
-          lastEditAt = now;
-        } catch (error) {
-          await this.reportError(error, { stage: "delivery", event });
-          lastEditAt = now;
-        }
-      }
-    } catch (error) {
-      void result.catch(() => undefined);
-      throw error;
-    }
-
-    if (signal.aborted) {
-      void result.catch(() => undefined);
-      throw timedOutError();
-    }
-
-    return { outcome: await result, deliveredText };
-  }
-
-  /**
-   * Bounds a single agent run (generate, stream, or resume) with the
-   * configured execution timeout. On timeout the run's signal aborts so a
-   * cooperative executor settles promptly; the error surfaces through the
-   * standard `agent`-stage reporting path. Racing the executor releases its
-   * caller even if it ignores cancellation, while the queue still drains
-   * error handling and delivery before processing the next message.
-   */
-  private runWithTimeout<Value>(
-    signal: AbortSignal,
-    run: (runSignal: AbortSignal) => Promise<Value>,
-  ): Promise<Value> {
-    const controller = new AbortController();
-    const onAbort = () => controller.abort(signal.reason);
-    if (signal.aborted) {
-      controller.abort(signal.reason);
-    } else {
-      signal.addEventListener("abort", onAbort, { once: true });
-    }
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const timeout =
-      this.options.runTimeoutMs === Number.POSITIVE_INFINITY
-        ? new Promise<never>(() => undefined)
-        : new Promise<never>((_, reject) => {
-            timer = setTimeout(() => {
-              controller.abort(timedOutError());
-              reject(timedOutError());
-            }, this.options.runTimeoutMs);
-          });
-    const result = Promise.resolve().then(() => run(controller.signal));
-    void result.catch(() => undefined);
-    return Promise.race([result, timeout]).finally(() => {
-      clearTimeout(timer);
-      signal.removeEventListener("abort", onAbort);
-    });
-  }
-
-  private async deliver(
-    address: ChannelAddress,
-    event: ChannelEvent<RawEvent>,
-    provisional: SentChannelMessage | undefined,
-    response: string | ChannelMessage,
-    deliveredText?: string,
-  ): Promise<void> {
-    const message = typeof response === "string" ? { text: response } : response;
-    const text = message.text;
-    if (text.length === 0 && message.attachments === undefined) return;
-    const parts = this.messageParts(message);
-    if (provisional === undefined) {
-      await sendChannelMessage({ channel: this.options.channel, address, message });
-      return;
-    }
-    if (message.attachments !== undefined) {
-      const deleteMessage = this.options.channel.delete;
-      if (deleteMessage === undefined) {
-        throw new Error("Attachment delivery with a placeholder requires channel deletion support");
-      }
-      try {
-        await sendChannelMessage({ channel: this.options.channel, address, message });
-      } catch (error) {
-        // Best-effort placeholder cleanup: the send error (e.g. a
-        // PartialDeliveryError with sent/failedIndex details) must win, so a
-        // failing delete must not replace it. Report the delete failure
-        // separately instead.
-        try {
-          await deleteMessage.call(this.options.channel, provisional);
-        } catch (deleteError) {
-          await this.reportError(deleteError, { stage: "delivery", event });
-        }
-        throw error;
-      }
-      await deleteMessage.call(this.options.channel, provisional);
-      return;
-    }
-    const first = parts[0];
-    if (first === undefined)
-      throw new Error("Channel splitMessage must return at least one message");
-    const edit = this.options.channel.edit;
-    if (first.text !== deliveredText && edit !== undefined) {
-      await edit.call(this.options.channel, provisional, first);
-    }
-    for (const part of parts.slice(1)) {
-      await this.options.channel.send(address, part);
-    }
   }
 
   private async completeOutcome(
@@ -459,17 +286,22 @@ export class ChannelAgentService<RawEvent = unknown, Output = string> {
         if (this.options.agent.resume === undefined) {
           throw new TypeError("Channel agent executor cannot resume interactions");
         }
+
         pending = {
           continuation: outcome.continuation,
           interaction: outcome.interaction,
         };
+
         if (this.options.channel.capabilities?.actions === true) {
           pending = { ...pending, actionToken: randomUUID().replaceAll("-", "") };
         }
+
         const timeoutMs = this.options.interactions.timeoutMs;
+
         if (timeoutMs !== undefined) {
           pending = { ...pending, expiresAt: Date.now() + timeoutMs };
         }
+
         await this.options.interactions.store.set(channelInteractionKey(event), pending);
         const rendered = responseMessage(
           await this.options.interactions.render({ pending, event }),
@@ -488,21 +320,23 @@ export class ChannelAgentService<RawEvent = unknown, Output = string> {
       }
     } catch (error) {
       if (pending !== undefined) await this.rollbackInteraction(event, pending);
+
       const stage = outcome.type === "interaction" ? "interaction" : "prepare";
       await this.handleFailure(error, stage, event, provisional, signal);
       return;
     }
 
-    // Once an outcome is being finalized, shutdown must drain its delivery too.
-    // In particular, a stored interaction must have a prompt the user can answer.
     try {
       await this.deliver(eventAddress(event), event, provisional, response, deliveredText);
     } catch (error) {
       if (pending !== undefined) await this.rollbackInteraction(event, pending);
+
       await this.reportError(error, { stage: "delivery", event });
       return;
     }
+
     const acknowledge = this.options.acknowledge;
+
     if (
       outcome.type !== "interaction" &&
       acknowledge !== false &&
@@ -510,52 +344,40 @@ export class ChannelAgentService<RawEvent = unknown, Output = string> {
       event.type === "message"
     ) {
       if (acknowledge.clearOnCompletion !== false) {
-        await this.unreactFromEvent(event, acknowledge.reaction, signal);
+        await unreactFromEvent({
+          channel: this.options.channel,
+          event,
+          reaction: acknowledge.reaction,
+          signal,
+          reportError: (error, context) => this.reportError(error, context),
+        });
       }
-      await this.reactToEvent(event, acknowledge.completeReaction, signal);
+
+      await reactToEvent({
+        channel: this.options.channel,
+        event,
+        reaction: acknowledge.completeReaction,
+        signal,
+        reportError: (error, context) => this.reportError(error, context),
+      });
     }
   }
 
-  /** Reacts to an accepted incoming message when acknowledgement is configured and supported. */
   private async acknowledgeEvent(
     event: ChannelMessageEvent<RawEvent>,
     signal: AbortSignal,
   ): Promise<void> {
     const acknowledge = this.options.acknowledge;
+
     if (acknowledge === false || signal.aborted) return;
-    await this.reactToEvent(event, acknowledge.reaction, signal);
-  }
 
-  private async reactToEvent(
-    event: ChannelMessageEvent<RawEvent>,
-    reaction: string,
-    signal: AbortSignal,
-  ): Promise<void> {
-    if (signal.aborted) return;
-    const channel = this.options.channel;
-    if (channel.capabilities?.reactions !== true || channel.react === undefined) return;
-    const sent: SentChannelMessage = { id: event.id, address: eventAddress(event) };
-    try {
-      await channel.react.call(channel, sent, reaction);
-    } catch (error) {
-      await this.reportError(error, { stage: "acknowledge", event });
-    }
-  }
-
-  private async unreactFromEvent(
-    event: ChannelMessageEvent<RawEvent>,
-    reaction: string,
-    signal: AbortSignal,
-  ): Promise<void> {
-    if (signal.aborted) return;
-    const channel = this.options.channel;
-    if (channel.capabilities?.reactionRemovals !== true || channel.unreact === undefined) return;
-    const sent: SentChannelMessage = { id: event.id, address: eventAddress(event) };
-    try {
-      await channel.unreact.call(channel, sent, reaction);
-    } catch (error) {
-      await this.reportError(error, { stage: "acknowledge", event });
-    }
+    await reactToEvent({
+      channel: this.options.channel,
+      event,
+      reaction: acknowledge.reaction,
+      signal,
+      reportError: (error, context) => this.reportError(error, context),
+    });
   }
 
   private async processInteractionResponse(
@@ -564,23 +386,35 @@ export class ChannelAgentService<RawEvent = unknown, Output = string> {
     signal: AbortSignal,
   ): Promise<void> {
     const interactions = this.options.interactions;
+
     if (interactions === false) return;
+
     const cancelKeyword = interactions.cancelKeyword;
+
     if (
       cancelKeyword !== false &&
       event.text.trim().toLowerCase() === cancelKeyword.trim().toLowerCase()
     ) {
-      const claimed = await interactions.store.take({
-        key: channelInteractionKey(event),
-        interactionId: pending.interaction.id,
-      });
+      let claimed: PendingChannelAgentInteraction | undefined;
+      try {
+        claimed = await interactions.store.take({
+          key: channelInteractionKey(event),
+          interactionId: pending.interaction.id,
+        });
+      } catch (error) {
+        await this.handleFailure(error, "interaction", event, undefined, signal);
+        return;
+      }
+
       if (claimed === undefined) {
         await this.deliverInteractionNotice(event, interactions.expiredInteractionMessage);
         return;
       }
+
       if (interactions.cancelMessage !== false) {
         await this.deliverInteractionNotice(event, interactions.cancelMessage);
       }
+
       return;
     }
 
@@ -591,17 +425,9 @@ export class ChannelAgentService<RawEvent = unknown, Output = string> {
       await this.handleFailure(error, "interaction", event, undefined, signal);
       return;
     }
+
     if (response === undefined) {
-      try {
-        await this.deliver(
-          eventAddress(event),
-          event,
-          undefined,
-          interactions.invalidResponseMessage,
-        );
-      } catch (error) {
-        await this.reportError(error, { stage: "delivery", event });
-      }
+      await this.deliverInteractionNotice(event, interactions.invalidResponseMessage);
       return;
     }
 
@@ -615,8 +441,11 @@ export class ChannelAgentService<RawEvent = unknown, Output = string> {
     signal: AbortSignal,
   ): Promise<void> {
     const interactions = this.options.interactions;
+
     if (interactions === false) return;
+
     const resume = this.options.agent.resume?.bind(this.options.agent);
+
     if (resume === undefined) {
       await this.handleFailure(
         new TypeError("Channel agent executor cannot resume interactions"),
@@ -636,13 +465,15 @@ export class ChannelAgentService<RawEvent = unknown, Output = string> {
       await this.handleFailure(error, "interaction", event, undefined, signal);
       return;
     }
+
     if (claimed === undefined) {
       await this.deliverInteractionNotice(event, interactions.expiredInteractionMessage);
       return;
     }
 
     const address = eventAddress(event);
-    const provisional = await this.sendPlaceholder(address, event);
+    const provisional = await this.createPlaceholder(address, event);
+
     if (provisional === null) {
       await this.restoreInteraction(key, claimed, event);
       return;
@@ -650,7 +481,7 @@ export class ChannelAgentService<RawEvent = unknown, Output = string> {
 
     let outcome: AgentOutcome<Output>;
     try {
-      outcome = await this.runWithTimeout(signal, (runSignal) =>
+      outcome = await runWithTimeout(signal, this.options.runTimeoutMs, (runSignal) =>
         resume(claimed.continuation, response, { abortSignal: runSignal }),
       );
     } catch (error) {
@@ -658,8 +489,7 @@ export class ChannelAgentService<RawEvent = unknown, Output = string> {
       await this.handleFailure(error, "agent", event, provisional, signal);
       return;
     }
-    // The response has been consumed. Deliver the resulting outcome even if the
-    // executor finished successfully after shutdown requested an abort.
+
     await this.completeOutcome(outcome, event, provisional, signal);
   }
 
@@ -669,7 +499,9 @@ export class ChannelAgentService<RawEvent = unknown, Output = string> {
     event: ChannelEvent<RawEvent>,
   ): Promise<void> {
     const interactions = this.options.interactions;
+
     if (interactions === false) return;
+
     try {
       await interactions.store.set(key, pending);
     } catch (error) {
@@ -682,7 +514,9 @@ export class ChannelAgentService<RawEvent = unknown, Output = string> {
     pending: PendingChannelAgentInteraction,
   ): Promise<void> {
     const interactions = this.options.interactions;
+
     if (interactions === false) return;
+
     try {
       await interactions.store.delete({
         key: channelInteractionKey(event),
@@ -690,28 +524,6 @@ export class ChannelAgentService<RawEvent = unknown, Output = string> {
       });
     } catch (error) {
       await this.reportError(error, { stage: "interaction", event });
-    }
-  }
-
-  private async cleanupPlaceholder(provisional: SentChannelMessage | undefined): Promise<void> {
-    if (provisional === undefined) return;
-    const channel = this.options.channel;
-    const deleteMessage = channel.delete;
-    if (deleteMessage !== undefined) {
-      try {
-        await deleteMessage.call(channel, provisional);
-        return;
-      } catch {
-        // Fall through to the edit fallback.
-      }
-    }
-    if (channel.capabilities?.messageEdits !== true) return;
-    const edit = channel.edit;
-    if (edit === undefined) return;
-    try {
-      await edit.call(channel, provisional, { text: INTERRUPTED_MESSAGE });
-    } catch {
-      // Best-effort shutdown cleanup; nothing further to do.
     }
   }
 
@@ -726,41 +538,46 @@ export class ChannelAgentService<RawEvent = unknown, Output = string> {
     }
   }
 
-  private async sendPlaceholder(
+  private createPlaceholder(
     address: ChannelAddress,
     event: ChannelEvent<RawEvent>,
   ): Promise<SentChannelMessage | undefined | null> {
-    if (this.options.channel.capabilities?.typing === true) {
-      try {
-        await this.options.channel.showTyping?.(address);
-      } catch (error) {
-        await this.reportError(error, { stage: "delivery", event });
-      }
-    }
-    const placeholder = this.options.streaming.placeholder;
-    if (placeholder === false || this.options.channel.edit === undefined) return undefined;
-    if (
-      this.options.channel.capabilities?.outboundAttachments !== undefined &&
-      this.options.channel.delete === undefined
-    ) {
-      return undefined;
-    }
-    try {
-      const first = this.messageParts({ text: placeholder })[0];
-      if (first === undefined)
-        throw new Error("Channel splitMessage must return at least one message");
-      return await this.options.channel.send(address, first);
-    } catch (error) {
-      await this.reportError(error, { stage: "delivery", event });
-      return null;
-    }
+    return sendPlaceholder({
+      channel: this.options.channel,
+      address,
+      event,
+      placeholder: this.options.streaming.placeholder,
+      reportError: (error, context) => this.reportError(error, context),
+    });
   }
 
-  private messageParts(message: ChannelMessage): readonly ChannelMessage[] {
-    const parts = this.options.channel.splitMessage(message);
-    if (parts.length === 0)
-      throw new Error("Channel splitMessage must return at least one message");
-    return parts;
+  private deliver(
+    address: ChannelAddress,
+    event: ChannelEvent<RawEvent>,
+    provisional: SentChannelMessage | undefined,
+    response: string | ChannelMessage,
+    deliveredText?: string,
+  ): Promise<void> {
+    if (deliveredText === undefined) {
+      return deliverChannelResponse({
+        channel: this.options.channel,
+        address,
+        event,
+        provisional,
+        response,
+        reportError: (error, context) => this.reportError(error, context),
+      });
+    }
+
+    return deliverChannelResponse({
+      channel: this.options.channel,
+      address,
+      event,
+      provisional,
+      response,
+      deliveredText,
+      reportError: (error, context) => this.reportError(error, context),
+    });
   }
 
   private async handleFailure(
@@ -771,10 +588,12 @@ export class ChannelAgentService<RawEvent = unknown, Output = string> {
     signal: AbortSignal,
   ): Promise<void> {
     if (signal.aborted) {
-      await this.cleanupPlaceholder(provisional);
+      await cleanupPlaceholder(this.options.channel, provisional);
       return;
     }
+
     await this.reportError(error, { stage, event });
+
     if (this.options.errorMessage === false) return;
 
     try {
@@ -784,236 +603,33 @@ export class ChannelAgentService<RawEvent = unknown, Output = string> {
     }
   }
 
-  private async reportError(
-    error: unknown,
-    context: ChannelAgentErrorContext<RawEvent>,
-  ): Promise<void> {
-    try {
-      await this.options.onError?.(error, context);
-    } catch {
-      // Error observers must not interrupt channel delivery.
-    }
+  private reportError(error: unknown, context: ChannelAgentErrorContext<RawEvent>): Promise<void> {
+    return reportChannelError(this.options.onError, error, context);
   }
 }
 
-function resolveOptions<RawEvent, Output>(
-  options: ChannelAgentOptions<RawEvent, Output>,
-): ResolvedOptions<RawEvent, Output> {
-  const editIntervalMs = options.streaming?.editIntervalMs ?? DEFAULT_EDIT_INTERVAL_MS;
-  if (!Number.isSafeInteger(editIntervalMs) || editIntervalMs < 0) {
-    throw new TypeError("Channel agent edit interval must be a nonnegative integer");
+function commandOverrides<RawEvent, Output>(
+  handler: ChannelAgentCommandHandler<RawEvent, Output> | undefined,
+  commandEvent: ChannelCommandEvent<RawEvent>,
+): CommandOverrides<RawEvent, Output> | undefined {
+  if (handler === undefined) return undefined;
+
+  const overrides: CommandOverrides<RawEvent, Output> = {};
+
+  if (handler.createPrompt !== undefined) {
+    const createPrompt = handler.createPrompt;
+    overrides.createPrompt = (request) => createPrompt({ ...request, event: commandEvent });
   }
 
-  const placeholder = options.streaming?.placeholder ?? DEFAULT_PLACEHOLDER;
-  if (placeholder !== false && placeholder.length === 0) {
-    throw new TypeError("Channel agent placeholder must not be empty");
+  if (handler.createSession !== undefined) {
+    const createSession = handler.createSession;
+    overrides.createSession = () => createSession(commandEvent);
   }
-  const errorMessage = options.errorMessage ?? DEFAULT_ERROR_MESSAGE;
-  if (errorMessage !== false && errorMessage.length === 0) {
-    throw new TypeError("Channel agent error message must not be empty");
-  }
-  const emptyResponseMessage = options.emptyResponseMessage ?? DEFAULT_EMPTY_RESPONSE_MESSAGE;
-  if (emptyResponseMessage.length === 0) {
-    throw new TypeError("Channel agent empty response message must not be empty");
-  }
-  const runTimeoutMs = options.runTimeoutMs ?? DEFAULT_RUN_TIMEOUT_MS;
-  if (
-    runTimeoutMs !== Number.POSITIVE_INFINITY &&
-    (!Number.isSafeInteger(runTimeoutMs) || runTimeoutMs <= 0 || runTimeoutMs > MAX_TIMEOUT_MS)
-  ) {
-    throw new TypeError(
-      "Channel agent run timeout must be a positive integer no larger than 2147483647",
-    );
-  }
-  const interactions = resolveInteractionOptions(options.interactions);
-  const multimodal =
-    options.multimodal === false ? false : resolveMultimodalOptions(options.multimodal);
-  const acknowledge = resolveAcknowledgement(options.acknowledge);
-  const commands =
-    options.commands === false || options.commands === undefined
-      ? false
-      : {
-          shouldHandle:
-            (options.commands === true ? undefined : options.commands.shouldHandle) ?? (() => true),
-          commands: options.commands === true ? {} : (options.commands.commands ?? {}),
-        };
 
-  return {
-    channel: options.channel,
-    agent: options.agent,
-    shouldHandle: options.shouldHandle ?? defaultShouldHandleChannelEvent,
-    createPrompt:
-      options.createPrompt ??
-      ((request) => {
-        const { event, context } = request;
-        if (multimodal === false && event.attachments.length > 0) {
-          throw new TypeError("Channel agent multimodal prompts are disabled");
-        }
-        return channelMessagePrompt({
-          channel: context.channel,
-          event,
-          ...(multimodal === false ? {} : multimodal),
-          signal: context.abortSignal,
-        });
-      }),
-    createSession: options.createSession ?? defaultCreateSession(options.agent),
-    renderOutcome: options.renderOutcome ?? defaultRenderOutcome,
-    streaming: {
-      enabled: options.streaming?.enabled ?? options.agent.model?.capabilities.streaming ?? true,
-      editIntervalMs,
-      placeholder,
-    },
-    runTimeoutMs,
-    errorMessage,
-    emptyResponseMessage,
-    acknowledge,
-    commands,
-    interactions,
-    onError: options.onError,
-  };
-}
+  if (handler.renderOutcome !== undefined) {
+    const renderOutcome = handler.renderOutcome;
+    overrides.renderOutcome = (request) => renderOutcome({ ...request, event: commandEvent });
+  }
 
-/** Per-call pipeline overrides sourced from a matched per-command handler. */
-type CommandOverrides<RawEvent, Output> = {
-  createPrompt?: (
-    request: Readonly<{
-      event: ChannelMessageEvent<RawEvent>;
-      context: ChannelAgentPromptContext<RawEvent>;
-    }>,
-  ) => AgentPrompt | Promise<AgentPrompt>;
-  createSession?: NonNullable<ChannelAgentOptions<RawEvent, Output>["createSession"]>;
-  renderOutcome?: NonNullable<ChannelAgentOptions<RawEvent, Output>["renderOutcome"]>;
-};
-
-/** Converts a command event into the message event shape the run pipeline understands. */
-function commandAsMessage<RawEvent>(
-  event: ChannelCommandEvent<RawEvent>,
-): ChannelMessageEvent<RawEvent> {
-  const text = event.text.length > 0 ? `/${event.name} ${event.text}` : `/${event.name}`;
-  const message: {
-    type: "message";
-    id: string;
-    platform: string;
-    accountId?: string;
-    conversation: ChannelCommandEvent<RawEvent>["conversation"];
-    sender: ChannelCommandEvent<RawEvent>["sender"];
-    text: string;
-    attachments: readonly [];
-    mentionedBot: boolean;
-    raw: RawEvent;
-  } = {
-    type: "message",
-    id: event.id,
-    platform: event.platform,
-    conversation: event.conversation,
-    sender: event.sender,
-    text,
-    attachments: [],
-    mentionedBot: true,
-    raw: event.raw,
-  };
-  if (event.accountId !== undefined) message.accountId = event.accountId;
-  return message;
-}
-
-function resolveAcknowledgement(
-  options: string | false | ChannelAgentAcknowledgementOptions | undefined,
-): ChannelAgentAcknowledgementOptions | false {
-  if (options === undefined || options === false) return false;
-  const resolved: ChannelAgentAcknowledgementOptions =
-    typeof options === "string" ? { reaction: options } : options;
-  if (resolved.reaction.length === 0) {
-    throw new TypeError("Channel agent acknowledgement reaction must not be empty");
-  }
-  if (resolved.completeReaction !== undefined && resolved.completeReaction.length === 0) {
-    throw new TypeError("Channel agent acknowledgement complete reaction must not be empty");
-  }
-  return resolved;
-}
-
-function resolveInteractionOptions<RawEvent>(
-  options: false | ChannelAgentInteractionOptions<RawEvent> | undefined,
-): ResolvedOptions<RawEvent, unknown>["interactions"] {
-  if (options === false) return false;
-  const invalidResponseMessage =
-    options?.invalidResponseMessage ?? DEFAULT_INVALID_INTERACTION_RESPONSE_MESSAGE;
-  if (invalidResponseMessage.length === 0) {
-    throw new TypeError("Channel agent invalid interaction response message must not be empty");
-  }
-  const expiredInteractionMessage =
-    options?.expiredInteractionMessage ?? DEFAULT_EXPIRED_INTERACTION_MESSAGE;
-  if (expiredInteractionMessage.length === 0) {
-    throw new TypeError("Channel agent expired interaction message must not be empty");
-  }
-  const timeoutMs = options?.timeoutMs;
-  if (timeoutMs !== undefined && (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0)) {
-    throw new TypeError("Channel agent interaction timeout must be a positive integer");
-  }
-  const cancelKeyword =
-    options?.cancelKeyword === undefined ? DEFAULT_CANCEL_KEYWORD : options.cancelKeyword;
-  if (cancelKeyword !== false && cancelKeyword.trim().length === 0) {
-    throw new TypeError("Channel agent cancel keyword must not be blank");
-  }
-  const cancelMessage =
-    options?.cancelMessage === undefined ? DEFAULT_CANCEL_MESSAGE : options.cancelMessage;
-  if (cancelMessage !== false && cancelMessage.length === 0) {
-    throw new TypeError("Channel agent cancel message must not be empty");
-  }
-  return {
-    store: options?.store ?? new MemoryChannelAgentInteractionStore(),
-    render: options?.render ?? renderChannelAgentInteraction,
-    parseResponse: options?.parseResponse ?? parseChannelAgentInteractionResponse,
-    parseAction: options?.parseAction ?? parseChannelAgentActionResponse,
-    invalidResponseMessage,
-    expiredInteractionMessage,
-    timeoutMs,
-    cancelKeyword,
-    cancelMessage,
-  };
-}
-
-function defaultCreateSession<Output>(
-  agent: ChannelAgentOptions<unknown, Output>["agent"],
-): (event: ChannelMessageEvent) => MemoryScope | undefined {
-  if ("memory" in agent && agent.memory === undefined) return () => undefined;
-  return defaultChannelAgentSession;
-}
-
-function defaultRenderOutcome<Output>(
-  request: Readonly<{
-    outcome: AgentOutcome<Output>;
-    event: ChannelEvent;
-  }>,
-): string {
-  const outcome = request.outcome;
-  if (outcome.text.length > 0) return outcome.text;
-  if (outcome.type === "blocked") return outcome.message ?? outcome.reason;
-  if (outcome.type === "interaction") {
-    return "The agent needs additional input that this channel cannot handle yet.";
-  }
-  return "";
-}
-
-function responseMessage(value: string | ChannelMessage, fallback: string): ChannelMessage {
-  const message = typeof value === "string" ? { text: value } : value;
-  return message.text.length === 0 && message.attachments === undefined
-    ? { text: fallback }
-    : message;
-}
-
-function eventAddress(event: ChannelEvent): ChannelAddress {
-  const address: {
-    platform: string;
-    accountId?: string;
-    conversationId: string;
-    threadId?: string;
-  } = {
-    platform: event.platform,
-    conversationId: event.conversation.id,
-  };
-  if (event.accountId !== undefined) address.accountId = event.accountId;
-  if (event.conversation.threadId !== undefined) {
-    address.threadId = event.conversation.threadId;
-  }
-  return address;
+  return overrides;
 }

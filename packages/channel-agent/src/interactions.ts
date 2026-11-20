@@ -3,19 +3,36 @@ import type {
   AgentInteractionRequest,
   AgentInteractionResponse,
 } from "@anvia/core/agent/interactions";
+import { DEFAULT_PATTERNS, createRedactor } from "@anvia/core/redaction";
 import type { ChannelAction, ChannelActionEvent, ChannelMessageEvent } from "@anvia/channel";
 import { MAX_CHANNEL_ACTION_LABEL_LENGTH } from "@anvia/channel";
 import { channelConversationKey } from "./defaults.js";
 
 const MAX_APPROVAL_INPUT_PREVIEW_LENGTH = 1_000;
 const REDACTED_VALUE = "[redacted]";
+const CREDENTIAL_PATTERN_NAMES = new Set([
+  "googleApiKey",
+  "githubToken",
+  "awsAccessKeyId",
+  "pemPrivateKey",
+  "pemPrivateKeyTruncated",
+  "awsSecretAccessKey",
+  "slackToken",
+  "jwt",
+  "apiKey",
+  "bearer",
+]);
+const approvalCredentialRedactor = createRedactor({
+  replacement: REDACTED_VALUE,
+  patterns: DEFAULT_PATTERNS.filter((pattern) => CREDENTIAL_PATTERN_NAMES.has(pattern.name)),
+});
 
 export type PendingChannelAgentInteraction = Readonly<{
   continuation: AgentContinuation;
   interaction: AgentInteractionRequest;
-  /** Opaque nonce used to reject callbacks from older interaction messages. */
+
   actionToken?: string;
-  /** Epoch milliseconds after which the pending interaction expires. */
+
   expiresAt?: number;
 }>;
 
@@ -40,11 +57,14 @@ export class MemoryChannelAgentInteractionStore implements ChannelAgentInteracti
   private readonly pending = new Map<string, PendingChannelAgentInteraction>();
   get(key: string): PendingChannelAgentInteraction | undefined {
     const pending = this.pending.get(key);
+
     if (pending === undefined) return undefined;
+
     if (interactionExpired(pending)) {
       this.pending.delete(key);
       return undefined;
     }
+
     return pending;
   }
 
@@ -56,19 +76,24 @@ export class MemoryChannelAgentInteractionStore implements ChannelAgentInteracti
     interactionId,
   }: Readonly<{ key: string; interactionId: string }>): PendingChannelAgentInteraction | undefined {
     const pending = this.pending.get(key);
+
     if (pending === undefined || pending.interaction.id !== interactionId) return undefined;
+
     this.pending.delete(key);
+
     if (interactionExpired(pending)) return undefined;
+
     return pending;
   }
   delete({ key, interactionId }: Readonly<{ key: string; interactionId: string }>): void {
     const pending = this.pending.get(key);
+
     if (pending === undefined || pending.interaction.id !== interactionId) return;
+
     this.pending.delete(key);
   }
 }
 
-/** True when the pending interaction carries an expiry that has passed. */
 export function interactionExpired(pending: PendingChannelAgentInteraction): boolean {
   return pending.expiresAt !== undefined && pending.expiresAt <= Date.now();
 }
@@ -81,15 +106,19 @@ export function channelInteractionActions(
   pending: PendingChannelAgentInteraction,
 ): readonly ChannelAction[] | undefined {
   const token = pending.actionToken;
+
   if (token === undefined) return undefined;
+
   if (pending.interaction.type === "tool-approval") {
     return [
       { id: actionId(token, "approve"), label: "Approve", style: "primary" },
       { id: actionId(token, "deny"), label: "Deny", style: "danger" },
     ];
   }
+
   const questions = pending.interaction.questions;
   const question = questions.length === 1 ? questions[0] : undefined;
+
   if (
     question?.choices === undefined ||
     question.choices.length === 0 ||
@@ -101,6 +130,7 @@ export function channelInteractionActions(
   ) {
     return undefined;
   }
+
   return question.choices.map((choice, index) => ({
     id: actionId(token, `choice:${index}`),
     label: choice.label,
@@ -115,19 +145,26 @@ export function parseChannelAgentActionResponse(
 ): AgentInteractionResponse | undefined {
   const { event, pending } = request;
   const token = pending.actionToken;
+
   if (token === undefined) return undefined;
+
   if (pending.interaction.type === "tool-approval") {
     if (event.actionId === actionId(token, "approve")) {
       return { type: "tool-approval", approved: true };
     }
+
     if (event.actionId === actionId(token, "deny")) {
       return { type: "tool-approval", approved: false };
     }
+
     return undefined;
   }
+
   const question =
     pending.interaction.questions.length === 1 ? pending.interaction.questions[0] : undefined;
+
   if (question?.choices === undefined) return undefined;
+
   for (const [index, choice] of question.choices.entries()) {
     if (event.actionId === actionId(token, `choice:${index}`)) {
       return {
@@ -149,6 +186,7 @@ export function renderChannelAgentInteraction(
   }>,
 ): string {
   const interaction = request.pending.interaction;
+
   if (interaction.type === "tool-approval") {
     const reason = interaction.reason === undefined ? "" : `\n${interaction.reason}`;
     const input = renderApprovalInput(interaction.input);
@@ -177,9 +215,15 @@ function renderApprovalInput(input: unknown): string {
         input,
         (key, value: unknown) => {
           if (key.length > 0 && isSensitiveInputKey(key)) return REDACTED_VALUE;
+
+          if (typeof value === "string") return approvalCredentialRedactor.redactString(value);
+
           if (typeof value === "bigint") return value.toString();
+
           if (typeof value !== "object" || value === null) return value;
+
           if (seen.has(value)) return "[circular]";
+
           seen.add(value);
           return value;
         },
@@ -190,6 +234,7 @@ function renderApprovalInput(input: unknown): string {
   }
 
   if (preview.length <= MAX_APPROVAL_INPUT_PREVIEW_LENGTH) return preview;
+
   const suffix = "\n… [truncated]";
   return `${preview.slice(0, MAX_APPROVAL_INPUT_PREVIEW_LENGTH - suffix.length)}${suffix}`;
 }
@@ -217,16 +262,21 @@ export function parseChannelAgentInteractionResponse(
 ): AgentInteractionResponse | undefined {
   const { event, pending } = request;
   const interaction = pending.interaction;
+
   if (interaction.type === "tool-approval") {
     return parseApproval(event.text);
   }
 
   const lines = responseLines(event.text, interaction.questions.length);
+
   if (lines === undefined) return undefined;
+
   const answers: { questionId: string; value: string }[] = [];
   for (const [index, question] of interaction.questions.entries()) {
     const value = resolveQuestionValue(lines[index] ?? "", question);
+
     if (value === undefined) return undefined;
+
     answers.push({ questionId: question.id, value });
   }
   return { type: "tool-question", answers };
@@ -234,12 +284,15 @@ export function parseChannelAgentInteractionResponse(
 
 function parseApproval(text: string): AgentInteractionResponse | undefined {
   const answer = text.trim().toLocaleLowerCase("en-US");
+
   if (["approve", "approved", "yes", "y"].includes(answer)) {
     return { type: "tool-approval", approved: true };
   }
+
   if (["deny", "denied", "no", "n", "reject", "rejected"].includes(answer)) {
     return { type: "tool-approval", approved: false };
   }
+
   return undefined;
 }
 
@@ -248,11 +301,15 @@ function responseLines(text: string, expected: number): readonly string[] | unde
     const answer = text.trim();
     return answer.length === 0 ? undefined : [answer];
   }
-  const lines = text
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0)
-    .map((line, index) => line.replace(new RegExp(`^${index + 1}[.)]\\s*`), ""));
+
+  const lines: string[] = [];
+  for (const rawLine of text.split(/\r?\n/)) {
+    const trimmed = rawLine.trim();
+
+    if (trimmed.length === 0) continue;
+
+    lines.push(trimmed.replace(new RegExp(`^${lines.length + 1}[.)]\\s*`), ""));
+  }
   return lines.length === expected ? lines : undefined;
 }
 
@@ -261,12 +318,16 @@ function resolveQuestionValue(
   question: Extract<AgentInteractionRequest, { type: "tool-question" }>["questions"][number],
 ): string | undefined {
   const value = answer.trim();
+
   if (value.length === 0) return undefined;
+
   const choice = question.choices?.find(
     (candidate) =>
       candidate.value.toLocaleLowerCase("en-US") === value.toLocaleLowerCase("en-US") ||
       candidate.label.toLocaleLowerCase("en-US") === value.toLocaleLowerCase("en-US"),
   );
+
   if (choice !== undefined) return choice.value;
+
   return question.choices === undefined || question.allowCustom === true ? value : undefined;
 }
