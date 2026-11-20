@@ -250,10 +250,14 @@ describe("Telegram Bot API client", () => {
     expect(batch.updates).toEqual([]);
     expect(batch.invalid).toHaveLength(1);
     const [invalid] = batch.invalid;
+
     if (invalid === undefined) throw new Error("Expected one quarantined update");
+
     expect(invalid.updateId).toBe(10);
     expect(invalid.error).toBeInstanceOf(TypeError);
+
     if (!(invalid.error instanceof TypeError)) throw new Error("Expected a TypeError");
+
     expect(invalid.error.message).toContain(message);
   });
 
@@ -414,59 +418,110 @@ function jsonResponse(body: unknown, status = 200): Response {
 
 describe("rate limit retries", () => {
   it("retries a 429 response after retry_after and succeeds", async () => {
-    let attempts = 0;
-    const seenDelays: number[] = [];
-    const fetchImplementation = (async (
-      _url: string | URL | globalThis.Request,
-      _init?: RequestInit,
-    ) => {
-      attempts += 1;
-      if (attempts === 1) {
-        return new Response(
-          JSON.stringify({
-            ok: false,
-            error_code: 429,
-            description: "Too Many Requests",
-            parameters: { retry_after: 0 },
-          }),
-          { status: 429, headers: { "content-type": "application/json" } },
-        );
-      }
-      return new Response(
-        JSON.stringify({
+    vi.useFakeTimers();
+    try {
+      let attempts = 0;
+      const fetchImplementation = (async () => {
+        attempts += 1;
+
+        if (attempts === 1) {
+          return jsonResponse(
+            {
+              ok: false,
+              error_code: 429,
+              description: "Too Many Requests",
+              parameters: { retry_after: 1 },
+            },
+            429,
+          );
+        }
+
+        return jsonResponse({
           ok: true,
           result: { message_id: 5, date: 1, chat: { id: -100, type: "supergroup" } },
-        }),
-        { status: 200, headers: { "content-type": "application/json" } },
-      );
-    }) as typeof fetch;
-    void seenDelays;
+        });
+      }) as typeof fetch;
 
-    const client = createTelegramBotApiClient({ token: "1:t", fetch: fetchImplementation });
-    const result = await client.sendMessage({ chat_id: -100, text: "hello" });
-    expect(result.message_id).toBe(5);
-    expect(attempts).toBe(2);
+      const client = createTelegramBotApiClient({ token: "1:t", fetch: fetchImplementation });
+      const pending = client.sendMessage({ chat_id: -100, text: "hello" });
+      await vi.advanceTimersByTimeAsync(1_000);
+      const result = await pending;
+      expect(result.message_id).toBe(5);
+      expect(attempts).toBe(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("retries a 429 response for multipart attachment uploads", async () => {
+    vi.useFakeTimers();
+    try {
+      let attempts = 0;
+      const fetchImplementation = (async () => {
+        attempts += 1;
+
+        if (attempts === 1) {
+          return jsonResponse(
+            {
+              ok: false,
+              error_code: 429,
+              description: "Too Many Requests",
+              parameters: { retry_after: 1 },
+            },
+            429,
+          );
+        }
+
+        return jsonResponse({
+          ok: true,
+          result: { message_id: 9, date: 1, chat: { id: -100, type: "supergroup" } },
+        });
+      }) as typeof fetch;
+
+      const client = createTelegramBotApiClient({ token: "1:t", fetch: fetchImplementation });
+      const pending = client.sendAttachment({
+        chat_id: -100,
+        attachment: {
+          type: "file",
+          mediaType: "application/pdf",
+          filename: "report.pdf",
+          source: { type: "data", data: "cGRm" },
+        },
+      });
+      await vi.advanceTimersByTimeAsync(1_000);
+      const result = await pending;
+      expect(result.message_id).toBe(9);
+      expect(attempts).toBe(2);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("gives up after three attempts", async () => {
-    let attempts = 0;
-    const fetchImplementation = (async () => {
-      attempts += 1;
-      return new Response(
-        JSON.stringify({
-          ok: false,
-          error_code: 429,
-          description: "Too Many Requests",
-          parameters: { retry_after: 0 },
-        }),
-        { status: 429, headers: { "content-type": "application/json" } },
-      );
-    }) as typeof fetch;
+    vi.useFakeTimers();
+    try {
+      let attempts = 0;
+      const fetchImplementation = (async () => {
+        attempts += 1;
+        return jsonResponse(
+          {
+            ok: false,
+            error_code: 429,
+            description: "Too Many Requests",
+            parameters: { retry_after: 1 },
+          },
+          429,
+        );
+      }) as typeof fetch;
 
-    const client = createTelegramBotApiClient({ token: "1:t", fetch: fetchImplementation });
-    await expect(client.sendMessage({ chat_id: -100, text: "hello" })).rejects.toThrow(
-      TelegramApiError,
-    );
-    expect(attempts).toBe(3);
+      const client = createTelegramBotApiClient({ token: "1:t", fetch: fetchImplementation });
+      const pending = client.sendMessage({ chat_id: -100, text: "hello" });
+      const assertion = expect(pending).rejects.toThrow(TelegramApiError);
+      await vi.advanceTimersByTimeAsync(2_000);
+      await assertion;
+      expect(attempts).toBe(3);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

@@ -9,6 +9,8 @@ import type {
   ChannelReply,
 } from "@anvia/channel";
 import { isChannelActionId } from "@anvia/channel";
+import { attachmentTypeFromMediaType } from "@anvia/channel/adapter";
+import type { Mutable } from "@anvia/channel/adapter";
 import type {
   TelegramChat,
   TelegramChatType,
@@ -19,14 +21,10 @@ import type {
   TelegramUser,
 } from "./types.js";
 
-type Mutable<T> = { -readonly [Key in keyof T]: T[Key] };
-
 export type TelegramNormalizationOptions = Readonly<{
-  /** Accept bare commands in groups and supergroups. Defaults to false. */
   allowBareGroupCommands?: boolean;
 }>;
 
-// undefined means ordinary message; null means a command that must be ignored.
 function telegramCommand(
   update: TelegramUpdate,
   message: TelegramMessage,
@@ -37,18 +35,23 @@ function telegramCommand(
   const entity = (message.entities ?? []).find(
     (candidate) => candidate.type === "bot_command" && candidate.offset === 0,
   );
+
   if (entity === undefined) return undefined;
+
   const raw = text.slice(entity.offset, entity.offset + entity.length);
   const withTarget = raw.slice(1);
   const at = withTarget.indexOf("@");
   const name = (at === -1 ? withTarget : withTarget.slice(0, at)).trim().toLowerCase();
+
   if (name.length === 0) return undefined;
+
   if (at !== -1) {
     const target = withTarget
       .slice(at + 1)
       .trim()
       .toLowerCase();
     const username = bot.username?.toLowerCase();
+
     if (target.length === 0 || username === undefined || target !== username) return null;
   } else if (
     (message.chat.type === "group" || message.chat.type === "supergroup") &&
@@ -56,8 +59,11 @@ function telegramCommand(
   ) {
     return null;
   }
+
   const sender = message.from;
+
   if (sender === undefined) return undefined;
+
   return {
     type: "command",
     id: String(update.update_id),
@@ -81,16 +87,24 @@ export function normalizeTelegramUpdate(
   options: TelegramNormalizationOptions = {},
 ): readonly ChannelEvent<TelegramUpdate>[] {
   if (update.callback_query !== undefined) return eventArray(normalizeTelegramAction(update, bot));
+
   if (update.message_reaction !== undefined) return normalizeTelegramReaction(update, bot);
+
   if (update.edited_message !== undefined) return eventArray(normalizeTelegramEdit(update, bot));
+
   const message = update.message;
+
   if (message === undefined || message.from === undefined) return [];
+
   const text = message.text ?? message.caption ?? "";
   const attachments = telegramAttachments(message);
+
   if (text.length === 0 && attachments.length === 0) return [];
 
   const command = telegramCommand(update, message, text, bot, options);
+
   if (command === null) return [];
+
   if (command !== undefined) return eventArray(command);
 
   const threadId = message.message_thread_id;
@@ -112,10 +126,12 @@ export function normalizeTelegramUpdate(
       message.reply_to_message?.from?.id === bot.id,
     raw: update,
   };
+
   if (message.reply_to_message !== undefined) {
     const reply: Mutable<ChannelReply> = {
       messageId: String(message.reply_to_message.message_id),
     };
+
     if (message.reply_to_message.from !== undefined) {
       reply.sender = {
         id: String(message.reply_to_message.from.id),
@@ -123,10 +139,14 @@ export function normalizeTelegramUpdate(
         bot: message.reply_to_message.from.is_bot,
       };
     }
+
     const replyText = message.reply_to_message.text ?? message.reply_to_message.caption;
+
     if (replyText !== undefined) reply.text = replyText;
+
     event.replyTo = reply;
   }
+
   return [event];
 }
 
@@ -135,9 +155,13 @@ function normalizeTelegramReaction(
   bot: TelegramUser,
 ): readonly ChannelEvent<TelegramUpdate>[] {
   const source = update.message_reaction;
+
   if (source === undefined) return [];
+
   const sender = reactionSender(source.user, source.actor_chat);
+
   if (sender === undefined) return [];
+
   const oldReactions = new Map(
     source.old_reaction.map((reaction) => [reactionKey(reaction), reaction]),
   );
@@ -171,13 +195,17 @@ function normalizeTelegramReaction(
 
 function reactionKey(reaction: TelegramReactionType): string {
   if (reaction.type === "emoji") return `emoji:${reaction.emoji}`;
+
   if (reaction.type === "custom_emoji") return `custom_emoji:${reaction.custom_emoji_id}`;
+
   return "paid";
 }
 
 function portableReaction(reaction: TelegramReactionType): string {
   if (reaction.type === "emoji") return reaction.emoji;
+
   if (reaction.type === "custom_emoji") return `telegram:custom_emoji:${reaction.custom_emoji_id}`;
+
   return "telegram:paid";
 }
 
@@ -185,12 +213,16 @@ function reactionSender(user: TelegramUser | undefined, actorChat: TelegramChat 
   if (user !== undefined) {
     return { id: String(user.id), displayName: displayName(user), bot: user.is_bot } as const;
   }
+
   if (actorChat === undefined) return undefined;
+
   const actorDisplayName =
     actorChat.title ??
     actorChat.username ??
     [actorChat.first_name, actorChat.last_name].filter(Boolean).join(" ");
+
   if (actorDisplayName.length === 0) return { id: String(actorChat.id), bot: false } as const;
+
   return { id: String(actorChat.id), displayName: actorDisplayName, bot: false } as const;
 }
 
@@ -205,10 +237,14 @@ function normalizeTelegramEdit(
   bot: TelegramUser,
 ): ChannelMessageEditedEvent<TelegramUpdate> | undefined {
   const message = update.edited_message;
+
   if (message?.from === undefined) return undefined;
+
   const text = message.text ?? message.caption ?? "";
   const attachments = telegramAttachments(message);
+
   if (text.length === 0 && attachments.length === 0) return undefined;
+
   return {
     type: "message-edited",
     id: String(update.update_id),
@@ -233,9 +269,11 @@ function normalizeTelegramAction(
 ): ChannelActionEvent<TelegramUpdate> | undefined {
   const query = update.callback_query;
   const message = query?.message;
+
   if (query === undefined || message === undefined || !isChannelActionId(query.data)) {
     return undefined;
   }
+
   return {
     type: "action",
     id: String(update.update_id),
@@ -258,6 +296,7 @@ function telegramAttachments(
 ): ChannelMessageEvent["attachments"] {
   const attachments: Array<ChannelMessageEvent["attachments"][number]> = [];
   const photo = message.photo?.at(-1);
+
   if (photo !== undefined) {
     const attachment: {
       id: string;
@@ -269,9 +308,12 @@ function telegramAttachments(
       type: "image",
       mediaType: "image/jpeg",
     };
+
     if (photo.file_size !== undefined) attachment.size = photo.file_size;
+
     attachments.push(attachment);
   }
+
   for (const [type, file] of [
     ["file", message.document],
     ["audio", message.audio],
@@ -279,6 +321,7 @@ function telegramAttachments(
     ["audio", message.voice],
   ] as const) {
     if (file === undefined) continue;
+
     const mediaType = file.mime_type ?? defaultMediaType(type);
     const attachment: {
       id: string;
@@ -288,11 +331,14 @@ function telegramAttachments(
       size?: number;
     } = {
       id: file.file_id,
-      type: type === "file" && mediaType.startsWith("image/") ? "image" : type,
+      type: type === "file" ? attachmentTypeFromMediaType(mediaType) : type,
       mediaType,
     };
+
     if (file.file_name !== undefined) attachment.filename = file.file_name;
+
     if (file.file_size !== undefined) attachment.size = file.file_size;
+
     attachments.push(attachment);
   }
   return attachments;
@@ -300,20 +346,26 @@ function telegramAttachments(
 
 function defaultMediaType(type: "file" | "audio" | "video"): string {
   if (type === "audio") return "audio/ogg";
+
   if (type === "video") return "video/mp4";
+
   return "application/octet-stream";
 }
 
 function conversationKind(type: TelegramChatType): ChannelConversationKind {
   if (type === "private") return "direct";
+
   if (type === "channel") return "channel";
+
   return "group";
 }
 
 function conversation(chat: TelegramChat, threadId?: number): ChannelConversation {
   const id = String(chat.id);
   const kind = conversationKind(chat.type);
+
   if (threadId === undefined) return { id, kind };
+
   return { id, kind, threadId: String(threadId) };
 }
 
@@ -328,8 +380,11 @@ function mentionsBot(
 ): boolean {
   return entities.some((entity) => {
     if (entity.type === "text_mention") return entity.user?.id === bot.id;
+
     if (entity.type !== "mention" && entity.type !== "bot_command") return false;
+
     if (bot.username === undefined) return false;
+
     const entityText = text.slice(entity.offset, entity.offset + entity.length);
     return entityText
       .toLocaleLowerCase("en-US")

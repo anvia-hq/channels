@@ -97,7 +97,6 @@ export type TelegramGetUpdatesRequest = Readonly<{
 }>;
 
 export type TelegramInvalidUpdate = Readonly<{
-  /** update_id extracted leniently from the unparseable payload, when it has one. */
   updateId: number | undefined;
   error: unknown;
 }>;
