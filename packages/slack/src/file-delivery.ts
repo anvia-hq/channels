@@ -2,7 +2,6 @@ import type { WebClient } from "@slack/web-api";
 import { isSlackDownloadUrl, isSlackId, isSlackTimestamp } from "./identifiers.js";
 import type { SlackSentMessage } from "./types.js";
 
-/** A failed delivery with resources still requiring cleanup. Retain this error to retry in-process. */
 export class SlackFileDeliveryError extends AggregateError {
   readonly retryCleanup: () => Promise<void>;
 
@@ -13,7 +12,6 @@ export class SlackFileDeliveryError extends AggregateError {
   }
 }
 
-/** Stage every file before publishing one message. Keep IDs even if completion fails. */
 export async function postSlackFiles(
   client: WebClient,
   fetchImplementation: typeof globalThis.fetch,
@@ -28,9 +26,8 @@ export async function postSlackFiles(
 
   const cleanup = async (): Promise<void> => {
     const failures: unknown[] = [];
+
     if (completionAttempted && uploaded.length > 0) {
-      // Do not delete files until we have retained the share timestamp: deletion
-      // can erase our only way to find a message after an uncertain completion.
       timestamp ??= await uploadedMessageTimestamp(client, uploaded, channelId, threadTimestamp);
       const shareTimestamp = timestamp;
       try {
@@ -42,6 +39,7 @@ export async function postSlackFiles(
         failures.push(error);
       }
     }
+
     const results = await Promise.allSettled(
       uploaded.map((file) =>
         ignoreSlackMissing(() => client.files.delete({ file: file.id }), "file_not_found"),
@@ -50,6 +48,7 @@ export async function postSlackFiles(
     failures.push(
       ...results.flatMap((result) => (result.status === "rejected" ? [result.reason] : [])),
     );
+
     if (failures.length > 0)
       throw new AggregateError(failures, "Slack file cleanup was incomplete");
   };
@@ -59,13 +58,17 @@ export async function postSlackFiles(
         filename: file.filename,
         length: file.file.byteLength,
       });
+
       if (ticket.ok !== true || !isSlackId(ticket.file_id) || !ticket.file_id.startsWith("F")) {
         throw new TypeError("Slack file upload ticket is invalid");
       }
+
       uploaded.push({ id: ticket.file_id, title: file.filename });
+
       if (!isSlackDownloadUrl(ticket.upload_url)) {
         throw new TypeError("Slack file upload URL is invalid");
       }
+
       let response: Response;
       try {
         response = await fetchImplementation(ticket.upload_url, {
@@ -74,37 +77,62 @@ export async function postSlackFiles(
           redirect: "error",
         });
       } catch {
-        // Upload URLs are signed; do not expose them through fetch errors.
         throw new Error("Slack file upload failed");
       }
+
       if (!response.ok) throw new Error(`Slack file upload failed with HTTP ${response.status}`);
     }
-    const request = {
+    const requestPayload: {
+      channel_id: string;
+      files: typeof uploaded;
+      initial_comment?: unknown;
+      blocks?: unknown;
+      thread_ts?: string;
+    } = {
       channel_id: channelId,
       files: uploaded,
-      ...(body.blocks === undefined ? { initial_comment: body.text } : { blocks: body.blocks }),
-      ...(threadTimestamp === undefined ? {} : { thread_ts: threadTimestamp }),
-    } as Parameters<typeof client.files.completeUploadExternal>[0];
+    };
+
+    if (body.blocks === undefined) {
+      requestPayload.initial_comment = body.text;
+    } else {
+      requestPayload.blocks = body.blocks;
+    }
+
+    if (threadTimestamp !== undefined) {
+      requestPayload.thread_ts = threadTimestamp;
+    }
+
+    const request = requestPayload as Parameters<typeof client.files.completeUploadExternal>[0];
     completionAttempted = true;
     const result = await client.files.completeUploadExternal(request);
+
     if (result.ok !== true) throw new Error("Slack file upload completion failed");
 
-    // Completion returns file IDs, not the message timestamp. Resolve the new share.
     timestamp = await uploadedMessageTimestamp(client, uploaded, channelId, threadTimestamp);
-    return {
+    const sent: {
+      channelId: string;
+      timestamp: string;
+      fileIds: readonly string[];
+      threadTimestamp?: string;
+    } = {
       channelId,
       timestamp,
       fileIds: uploaded.map((file) => file.id),
-      ...(threadTimestamp === undefined ? {} : { threadTimestamp }),
     };
+
+    if (threadTimestamp !== undefined) {
+      sent.threadTimestamp = threadTimestamp;
+    }
+
+    return sent;
   } catch (error) {
     try {
       await cleanup();
     } catch (cleanupError) {
-      throw new SlackFileDeliveryError(
-        [error, ...(cleanupError instanceof AggregateError ? cleanupError.errors : [cleanupError])],
-        cleanup,
-      );
+      const cleanupErrors =
+        cleanupError instanceof AggregateError ? cleanupError.errors : [cleanupError];
+      throw new SlackFileDeliveryError([error, ...cleanupErrors], cleanup);
     }
     throw error;
   }
@@ -117,24 +145,26 @@ async function uploadedMessageTimestamp(
   threadTimestamp: string | undefined,
 ): Promise<string> {
   if (files.length === 0) throw new TypeError("Slack file message requires attachments");
+
   let failure: unknown;
-  // Slack's SDK handles API rate limits; these bounded retries also cover share
-  // propagation and transient failures after the SDK's own retries are exhausted.
+
   for (const delay of [0, 250, 1_000, 2_000]) {
     if (delay > 0) await new Promise<void>((resolve) => setTimeout(resolve, delay));
+
     for (const file of files) {
       try {
         const info = await client.files.info({ file: file.id });
         const shares = info.file?.shares;
-        const share = [
-          ...(shares?.public?.[channelId] ?? []),
-          ...(shares?.private?.[channelId] ?? []),
-        ].find(
+        const publicShares = shares?.public?.[channelId] ?? [];
+        const privateShares = shares?.private?.[channelId] ?? [];
+        const share = [...publicShares, ...privateShares].find(
           (candidate) => candidate.thread_ts === threadTimestamp && isSlackTimestamp(candidate.ts),
         );
+
         if (info.ok !== true || !isSlackTimestamp(share?.ts)) {
           throw new TypeError("Slack uploaded file share timestamp is unavailable");
         }
+
         return share.ts;
       } catch (error) {
         failure = error;
@@ -164,6 +194,7 @@ export async function ignoreSlackMissing(
         (missingCode === "file_not_found" && error.data.error === "file_deleted"))
     )
       return;
+
     throw error;
   }
 }

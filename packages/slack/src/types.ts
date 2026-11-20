@@ -89,16 +89,16 @@ export type SlackSocketReaction = Readonly<{
 
 export type SlackSocketCommand = Readonly<{
   type: "command";
-  /** Stable identifier for de-duplication; derived from the slash-command trigger ID. */
+
   eventId: string;
   teamId: string;
   channelId: string;
   channelType: SlackChannelType;
   senderId: string;
   senderDisplayName?: string;
-  /** Command name without the leading slash, for example "ask" for "/ask". */
+
   name: string;
-  /** Argument text after the command name; empty when the command has no arguments. */
+
   text: string;
   botUserId: string;
 }>;
@@ -112,7 +112,6 @@ export type SlackSocketEvent =
   | SlackSocketReaction;
 
 export type SlackSentMessage = Readonly<{
-  /** Files owned by this delivery; pass these to transport.delete for complete cleanup. */
   fileIds?: readonly string[];
   channelId: string;
   timestamp: string;

@@ -483,7 +483,9 @@ describe("SlackSocketTransport Web API delivery", () => {
 
     expect(onError).toHaveBeenCalledTimes(1);
     const [error] = onError.mock.calls[0] ?? [];
+
     if (!(error instanceof Error)) throw new Error("Expected an error report");
+
     expect(error.message).toContain("Slack Socket Mode disconnected");
   });
 });

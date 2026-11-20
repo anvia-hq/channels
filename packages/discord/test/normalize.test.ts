@@ -219,6 +219,17 @@ describe("normalizeDiscordCommand", () => {
       normalizeDiscordEvent({ ...base, id: "not-a-snowflake", name: "ask", text: "" }),
     ).toBeUndefined();
     expect(normalizeDiscordEvent({ ...base, name: "", text: "" })).toBeUndefined();
+    expect(
+      normalizeDiscordEvent({ ...base, guildId: "bad-guild", name: "ask", text: "" }),
+    ).toBeUndefined();
+    expect(
+      normalizeDiscordEvent({
+        ...base,
+        user: { id: "bad", username: "indra", bot: false },
+        name: "ask",
+        text: "",
+      }),
+    ).toBeUndefined();
   });
 });
 

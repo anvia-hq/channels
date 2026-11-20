@@ -41,9 +41,9 @@ describe("ChannelAgentService placeholder partial delivery", () => {
     let sendCalls = 0;
     vi.spyOn(channel, "send").mockImplementation(async (address, message) => {
       sendCalls += 1;
-      // The first send is the streaming placeholder; it must succeed so a
-      // provisional message exists when the attachment delivery fails.
+
       if (sendCalls === 1) return originalSend(address, message);
+
       throw new Error("attachment part failed");
     });
 
@@ -84,9 +84,9 @@ describe("ChannelAgentService placeholder partial delivery", () => {
     let sendCalls = 0;
     vi.spyOn(channel, "send").mockImplementation(async (address, message) => {
       sendCalls += 1;
-      // The first send is the streaming placeholder; it must succeed so a
-      // provisional message exists when the attachment delivery fails.
+
       if (sendCalls === 1) return originalSend(address, message);
+
       throw new Error("attachment part failed");
     });
     vi.spyOn(channel, "delete").mockRejectedValue(new Error("delete failed"));

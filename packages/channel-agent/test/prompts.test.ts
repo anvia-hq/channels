@@ -111,6 +111,8 @@ function channelWith(loadAttachment?: NonNullable<Channel["loadAttachment"]>): C
     send: async (address) => ({ id: "1", address }),
     edit: async () => undefined,
   };
+
   if (loadAttachment !== undefined) channel.loadAttachment = loadAttachment;
+
   return channel;
 }

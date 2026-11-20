@@ -8,7 +8,8 @@ import type {
   ChannelMessageEvent,
   SentChannelMessage,
 } from "@anvia/channel";
-import { splitChannelMessage, validateChannelMessage } from "@anvia/channel";
+import { splitChannelMessage } from "@anvia/channel";
+import { reportChannelError, validateOutboundChannelMessage } from "@anvia/channel/adapter";
 import { parseSlackMessageId, validateSlackId, validateSlackTimestamp } from "./identifiers.js";
 import { normalizeSlackEvent } from "./normalize.js";
 import { SlackSocketTransport } from "./slack-socket-transport.js";
@@ -65,6 +66,7 @@ export class SlackChannel implements Channel<SlackSocketEvent> {
 
   constructor(options: SlackChannelOptions) {
     this.onError = options.onError;
+
     if (options.transport !== undefined && options.transport !== null) {
       this.transport = options.transport;
       return;
@@ -81,20 +83,23 @@ export class SlackChannel implements Channel<SlackSocketEvent> {
       botToken: options.botToken,
       onError: (error) => this.reportError(error, { operation: "socket" }),
     };
+
     if (options.fetch !== undefined) transportOptions.fetch = options.fetch;
+
     if (options.maximumAttachmentBytes !== undefined) {
       transportOptions.maximumAttachmentBytes = options.maximumAttachmentBytes;
     }
+
     this.transport = new SlackSocketTransport(transportOptions);
   }
 
   splitMessage(message: ChannelMessage): readonly ChannelMessage[] {
     const parts = splitChannelMessage({ message, maximumLength: MAX_MESSAGE_LENGTH });
-    // Slack routes a message into a thread via thread_ts, which send() derives from
-    // replyToMessageId. Every part of a split reply must carry the reply reference so
-    // continuations land in the same thread instead of the channel top level.
+
     const replyToMessageId = message.replyToMessageId;
+
     if (replyToMessageId === undefined) return parts;
+
     return parts.map((part) =>
       part.replyToMessageId === undefined ? { ...part, replyToMessageId } : part,
     );
@@ -108,19 +113,25 @@ export class SlackChannel implements Channel<SlackSocketEvent> {
     if (event.raw.type !== "message" && event.raw.type !== "app_mention") {
       throw new TypeError("Slack message raw event is invalid");
     }
+
     const file = event.raw.files.find((candidate) => candidate.id === attachment.id);
+
     if (file === undefined) throw new Error(`Slack attachment ${attachment.id} is unavailable`);
+
     return this.transport.loadAttachment(file, signal);
   }
 
   async start(handler: ChannelEventHandler<SlackSocketEvent>): Promise<void> {
     if (this.running) throw new Error("Slack channel is already running");
+
     if (typeof handler !== "function") throw new TypeError("Slack event handler is required");
+
     this.running = true;
 
     try {
       await this.transport.start(async (source) => {
         const event = normalizeSlackEvent(source);
+
         if (event === undefined || ("sender" in event && event.sender.bot)) return;
 
         try {
@@ -137,18 +148,17 @@ export class SlackChannel implements Channel<SlackSocketEvent> {
 
   async stop(): Promise<void> {
     if (!this.running) return;
+
     this.running = false;
     await this.transport.stop();
   }
 
   async send(address: ChannelAddress, message: ChannelMessage): Promise<SentChannelMessage> {
     validateAddress(address);
-    validateMessage(message);
+    const replyTimestamp = validateMessage(message);
     const sent = await this.transport.send(
       address.conversationId,
-      message.replyToMessageId === undefined
-        ? address.threadId
-        : parseSlackMessageId(message.replyToMessageId).timestamp,
+      replyTimestamp ?? address.threadId,
       message,
     );
 
@@ -161,66 +171,58 @@ export class SlackChannel implements Channel<SlackSocketEvent> {
       platform: this.platform,
       conversationId: sent.channelId,
     };
+
     if (address.accountId !== undefined) sentAddress.accountId = address.accountId;
+
     if (sent.threadTimestamp !== undefined) sentAddress.threadId = sent.threadTimestamp;
 
+    const fileIds = sent.fileIds ?? [];
     return {
-      id: [sent.timestamp, ...(sent.fileIds ?? [])].join(":"),
+      id: [sent.timestamp, ...fileIds].join(":"),
       address: sentAddress,
     };
   }
 
   async edit(sent: SentChannelMessage, message: ChannelMessage): Promise<void> {
-    validateAddress(sent.address);
-    parseSlackMessageId(sent.id);
+    const { timestamp } = validateSentMessage(sent);
     validateMessage(message);
+
     if (message.attachments !== undefined || message.replyToMessageId !== undefined) {
       throw new TypeError("Slack message attachments and replies cannot be edited");
     }
-    await this.transport.edit(
-      sent.address.conversationId,
-      parseSlackMessageId(sent.id).timestamp,
-      message,
-    );
+
+    await this.transport.edit(sent.address.conversationId, timestamp, message);
   }
 
   async delete(sent: SentChannelMessage): Promise<void> {
-    validateSentMessage(sent);
-    const { timestamp, fileIds } = parseSlackMessageId(sent.id);
+    const { timestamp, fileIds } = validateSentMessage(sent);
+
     if (fileIds.length === 0) await this.transport.delete(sent.address.conversationId, timestamp);
     else await this.transport.delete(sent.address.conversationId, timestamp, fileIds);
   }
 
   async react(sent: SentChannelMessage, reaction: string): Promise<void> {
-    validateSentMessage(sent);
+    const { timestamp } = validateSentMessage(sent);
+
     if (typeof reaction !== "string" || reaction.length === 0) {
       throw new TypeError("Slack reaction must not be empty");
     }
-    await this.transport.react(
-      sent.address.conversationId,
-      parseSlackMessageId(sent.id).timestamp,
-      reaction,
-    );
+
+    await this.transport.react(sent.address.conversationId, timestamp, reaction);
   }
 
   async unreact(sent: SentChannelMessage, reaction: string): Promise<void> {
-    validateSentMessage(sent);
+    const { timestamp } = validateSentMessage(sent);
+
     if (typeof reaction !== "string" || reaction.length === 0) {
       throw new TypeError("Slack reaction must not be empty");
     }
-    await this.transport.removeReaction(
-      sent.address.conversationId,
-      parseSlackMessageId(sent.id).timestamp,
-      reaction,
-    );
+
+    await this.transport.removeReaction(sent.address.conversationId, timestamp, reaction);
   }
 
-  private async reportError(error: unknown, context: SlackChannelErrorContext): Promise<void> {
-    try {
-      await this.onError?.(error, context);
-    } catch {
-      // Error observers must not terminate message delivery.
-    }
+  private reportError(error: unknown, context: SlackChannelErrorContext): Promise<void> {
+    return reportChannelError(this.onError, error, context);
   }
 }
 
@@ -228,29 +230,30 @@ function validateAddress(address: ChannelAddress): void {
   if (address.platform !== "slack") {
     throw new TypeError(`Slack channel cannot use a ${address.platform} address`);
   }
+
   validateSlackId(address.conversationId, "Slack conversation ID");
+
   if (address.threadId !== undefined) {
     validateSlackTimestamp(address.threadId, "Slack thread ID");
   }
 }
 
-function validateMessage(message: ChannelMessage): void {
-  if (
-    typeof message.text !== "string" ||
-    (message.text.length === 0 && message.attachments === undefined)
-  ) {
-    throw new TypeError("Slack message must include text or attachments");
-  }
-  if (message.text.length > MAX_MESSAGE_LENGTH) {
-    throw new RangeError(`Slack message text must not exceed ${MAX_MESSAGE_LENGTH} characters`);
-  }
-  validateChannelMessage(message);
+function validateMessage(message: ChannelMessage): string | undefined {
+  validateOutboundChannelMessage(message, {
+    platformLabel: "Slack",
+    maximumLength: MAX_MESSAGE_LENGTH,
+  });
+
   if (message.replyToMessageId !== undefined) {
-    parseSlackMessageId(message.replyToMessageId);
+    return parseSlackMessageId(message.replyToMessageId).timestamp;
   }
+
+  return undefined;
 }
 
-function validateSentMessage(sent: SentChannelMessage): void {
+function validateSentMessage(
+  sent: SentChannelMessage,
+): Readonly<{ timestamp: string; fileIds: readonly string[] }> {
   validateAddress(sent.address);
-  parseSlackMessageId(sent.id);
+  return parseSlackMessageId(sent.id);
 }

@@ -51,6 +51,28 @@ describe("normalizeTelegramUpdate", () => {
     ]);
   });
 
+  it("classifies audio and video documents by media type", () => {
+    const update: TelegramUpdate = {
+      update_id: 141,
+      message: {
+        message_id: 141,
+        from: { id: 7, is_bot: false, first_name: "Indra" },
+        chat: { id: 5, type: "private" },
+        document: {
+          file_id: "clip-1",
+          file_name: "clip.mp4",
+          mime_type: "video/mp4",
+          file_size: 250,
+        },
+      },
+    };
+
+    const event = normalizeTelegramUpdate(update, bot)[0];
+    expect(event?.type === "message" ? event.attachments : undefined).toEqual([
+      { id: "clip-1", type: "video", mediaType: "video/mp4", filename: "clip.mp4", size: 250 },
+    ]);
+  });
+
   it("preserves topics and detects username mentions", () => {
     const text = "hello @anvia_bot";
     const update = messageUpdate({
@@ -178,6 +200,7 @@ describe("normalizeTelegramUpdate", () => {
 
           for (const recipient of [bot, otherBot]) {
             const events = normalizeTelegramUpdate(command, recipient, { allowBareGroupCommands });
+
             if (recipient.id === identity.id) {
               expect(events).toMatchObject([
                 {
@@ -207,6 +230,7 @@ describe("normalizeTelegramUpdate", () => {
         });
         const { username: _username, ...withoutUsername } = bot;
         expect(normalizeTelegramUpdate(command, withoutUsername)).toEqual([]);
+
         if (token === "/ask@") expect(normalizeTelegramUpdate(command, bot)).toEqual([]);
       }
     });
@@ -349,10 +373,15 @@ function messageUpdate(options: MessageUpdateOptions): TelegramUpdate {
     },
     chat: { id: options.chatId, type: options.chatType },
   };
+
   if (options.threadId !== undefined) message.message_thread_id = options.threadId;
+
   if (options.text !== undefined) message.text = options.text;
+
   if (options.photo !== undefined) message.photo = options.photo;
+
   if (options.entities !== undefined) message.entities = options.entities;
+
   if (options.replyToBot) {
     message.reply_to_message = {
       message_id: 99,
@@ -361,6 +390,7 @@ function messageUpdate(options: MessageUpdateOptions): TelegramUpdate {
       text: "previous",
     };
   }
+
   return {
     update_id: options.updateId,
     message,

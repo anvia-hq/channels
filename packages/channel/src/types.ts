@@ -31,7 +31,6 @@ export type ChannelAttachment = Readonly<{
 
 export type ChannelAttachmentData =
   | Readonly<{ type: "url"; url: string }>
-  /** Base64-encoded file bytes. */
   | Readonly<{ type: "data"; data: string }>;
 
 export type ChannelOutboundAttachment = Readonly<{
@@ -51,21 +50,19 @@ export type ChannelReply = Readonly<{
 export type ChannelActionStyle = "default" | "primary" | "danger";
 
 export type ChannelAction = Readonly<{
-  /** Opaque application identifier returned by the platform when this action is selected. */
   id: string;
   label: string;
   style?: ChannelActionStyle;
 }>;
 
 export type ChannelCapabilities = Readonly<{
-  /** Whether messages may include actions and the channel can emit action events. */
   actions: boolean;
-  /** Outbound attachment kinds accepted by `send`. */
+
   outboundAttachments?: readonly ChannelAttachmentType[];
   replies?: boolean;
   typing?: boolean;
   reactions?: boolean;
-  /** Whether the bot's own reactions can be removed via `unreact`. */
+
   reactionRemovals?: boolean;
   delete?: boolean;
   messageEdits?: boolean;
@@ -140,9 +137,9 @@ export type ChannelCommandEvent<RawEvent = unknown> = Readonly<{
   accountId?: string;
   conversation: ChannelConversation;
   sender: ChannelSender;
-  /** Command name without the leading slash, for example "ask" for "/ask". */
+
   name: string;
-  /** Argument text after the command name; empty when the command has no arguments. */
+
   text: string;
   raw: RawEvent;
 }>;
@@ -173,7 +170,7 @@ export type ChannelEventHandler<RawEvent = unknown> = (
 
 export interface Channel<RawEvent = unknown> {
   readonly platform: string;
-  /** Optional so existing text-only custom adapters remain source-compatible. */
+
   readonly capabilities?: ChannelCapabilities;
 
   splitMessage(message: ChannelMessage): readonly ChannelMessage[];
@@ -189,6 +186,6 @@ export interface Channel<RawEvent = unknown> {
   delete?(sent: SentChannelMessage): Promise<void>;
   showTyping?(address: ChannelAddress): Promise<void>;
   react?(sent: SentChannelMessage, reaction: string): Promise<void>;
-  /** Removes a reaction previously added by this bot; gate on `capabilities.reactionRemovals`. */
+
   unreact?(sent: SentChannelMessage, reaction: string): Promise<void>;
 }

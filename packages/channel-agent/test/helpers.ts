@@ -55,7 +55,9 @@ export class FakeChannel implements Channel {
     _signal?: AbortSignal,
   ): Promise<ChannelAttachmentData> {
     const data = this.attachmentData.get(attachment.id);
+
     if (data === undefined) throw new Error(`Missing fake attachment: ${attachment.id}`);
+
     return data;
   }
 
@@ -67,27 +69,32 @@ export class FakeChannel implements Channel {
   async stop(): Promise<void> {
     this.stopCount += 1;
     this.handler = undefined;
+
     if (this.stopError !== undefined) throw this.stopError;
   }
 
   async send(address: ChannelAddress, message: ChannelMessage): Promise<SentChannelMessage> {
     if (this.handler === undefined) throw new Error("Fake channel is not running");
+
     this.sent.push({ address, message });
     return { id: String(this.sent.length), address };
   }
 
   async edit(sent: SentChannelMessage, message: ChannelMessage): Promise<void> {
     if (this.handler === undefined) throw new Error("Fake channel is not running");
+
     this.edits.push({ sent, message });
   }
 
   async delete(sent: SentChannelMessage): Promise<void> {
     if (this.handler === undefined) throw new Error("Fake channel is not running");
+
     this.deleted.push(sent);
   }
 
   async react(sent: SentChannelMessage, reaction: string): Promise<void> {
     if (this.reactError !== undefined) throw this.reactError;
+
     this.reacted.push({ sent, reaction });
   }
 
@@ -97,6 +104,7 @@ export class FakeChannel implements Channel {
 
   async emit(event: ChannelEvent): Promise<void> {
     if (this.handler === undefined) throw new Error("Fake channel is not running");
+
     await this.handler(event);
   }
 }

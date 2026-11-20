@@ -62,20 +62,29 @@ describe("TelegramChannel", () => {
           .mockResolvedValueOnce({ updates, invalid: [] })
           .mockImplementation(waitForAbort);
         const handler = vi.fn<(event: unknown) => Promise<void>>(async () => undefined);
-        const channel = telegram({
-          api: fake.api,
-          ...options,
-          ...(transport === "webhook" ? { webhook: { secretToken: "test-secret" } } : {}),
-        });
+        const channel = telegram(
+          transport === "webhook"
+            ? {
+                api: fake.api,
+                ...options,
+                webhook: { secretToken: "test-secret" },
+              }
+            : {
+                api: fake.api,
+                ...options,
+              },
+        );
 
         try {
           await channel.start(handler);
+
           if (transport === "webhook") {
             for (const update of updates) await channel.receiveWebhook(update, "test-secret");
           } else {
             await vi.waitFor(() => expect(fake.getUpdates).toHaveBeenCalledTimes(2));
             expect(fake.getUpdates.mock.calls[1]?.[0].offset).toBe(4);
           }
+
           expect(handler.mock.calls.map(([event]) => event)).toMatchObject(
             options.allowBareGroupCommands
               ? [
@@ -150,6 +159,7 @@ describe("TelegramChannel", () => {
       if ((request.offset ?? 0) <= 11) {
         return { updates: [poison, healthy], invalid: [] };
       }
+
       return waitForAbort(request, signal);
     });
     const handler = vi.fn<(event: unknown) => Promise<void>>(async (event) => {
@@ -280,6 +290,7 @@ describe("TelegramChannel", () => {
         if ((request.offset ?? 0) <= 10) {
           return { updates: [update], invalid: [] };
         }
+
         return waitForAbort(request, signal);
       });
       const handler = vi
@@ -299,13 +310,11 @@ describe("TelegramChannel", () => {
       await vi.advanceTimersByTimeAsync(0);
       expect(handler).toHaveBeenCalledTimes(1);
 
-      // First handler retry waits the base delay (10ms).
       await vi.advanceTimersByTimeAsync(9);
       expect(handler).toHaveBeenCalledTimes(1);
       await vi.advanceTimersByTimeAsync(1);
       expect(handler).toHaveBeenCalledTimes(2);
 
-      // Second handler retry waits the doubled delay (20ms).
       await vi.advanceTimersByTimeAsync(19);
       expect(handler).toHaveBeenCalledTimes(2);
       await vi.advanceTimersByTimeAsync(1);
@@ -333,6 +342,7 @@ describe("TelegramChannel", () => {
         if ((request.offset ?? 0) <= 10) {
           return { updates: [update], invalid: [] };
         }
+
         return waitForAbort(request, signal);
       });
       const handler = vi
@@ -350,7 +360,6 @@ describe("TelegramChannel", () => {
       await vi.advanceTimersByTimeAsync(0);
       expect(handler).toHaveBeenCalledTimes(1);
 
-      // Attempt 2 waits 20s, attempt 3 would wait 40s but is capped at 30s.
       await vi.advanceTimersByTimeAsync(20_000);
       expect(handler).toHaveBeenCalledTimes(2);
       await vi.advanceTimersByTimeAsync(29_999);
@@ -385,7 +394,6 @@ describe("TelegramChannel", () => {
     await channel.start(handler);
 
     try {
-      // More distinct failing updates than the remembered-update cap.
       for (let id = 1; id <= 1_002; id++) {
         await expect(channel.receiveWebhook(textUpdate(id), "webhook_secret")).rejects.toThrow(
           "always fails",
@@ -617,11 +625,13 @@ describe("TelegramChannel", () => {
       const batch = { updates: [update, textUpdate(21)], invalid: [] };
       fake.getUpdates.mockResolvedValueOnce(batch);
       const handler = vi.fn<(event: unknown) => Promise<void>>().mockResolvedValue(undefined);
+
       if (retryHandler) {
         fake.answerCallbackQuery.mockResolvedValueOnce(true);
         handler.mockRejectedValueOnce(handlerError);
         fake.getUpdates.mockResolvedValueOnce(batch);
       }
+
       fake.getUpdates.mockImplementation(waitForAbort);
       const onError = vi.fn().mockRejectedValue(new Error("observer failure"));
       const channel = telegram({ api: fake.api, polling: { retryDelayMs: 0 }, onError });
@@ -630,13 +640,13 @@ describe("TelegramChannel", () => {
         await channel.start(handler);
         await vi.waitFor(() => expect(fake.getUpdates).toHaveBeenCalledTimes(retryHandler ? 3 : 2));
         const action = expect.objectContaining({ type: "action", id: "20" });
-        expect(handler.mock.calls.map(([event]) => event)).toEqual([
-          ...(retryHandler ? [action] : []),
-          action,
-          expect.objectContaining({ type: "message", id: "21" }),
-        ]);
+        const expectedEvents = retryHandler
+          ? [action, action, expect.objectContaining({ type: "message", id: "21" })]
+          : [action, expect.objectContaining({ type: "message", id: "21" })];
+        expect(handler.mock.calls.map(([event]) => event)).toEqual(expectedEvents);
         expect(fake.getUpdates.mock.lastCall?.[0].offset).toBe(22);
         expect(onError).toHaveBeenCalledWith(ackError, { operation: "handle", update });
+
         if (retryHandler) {
           expect(fake.getUpdates.mock.calls[1]?.[0].offset).toBeUndefined();
           expect(onError).toHaveBeenCalledWith(handlerError, { operation: "handle", update });
@@ -658,10 +668,12 @@ describe("TelegramChannel", () => {
       const fake = fakeApi();
       fake.answerCallbackQuery.mockRejectedValue(ackError);
       const handler = vi.fn<(event: unknown) => Promise<void>>().mockResolvedValue(undefined);
+
       if (retryHandler) {
         fake.answerCallbackQuery.mockResolvedValueOnce(true);
         handler.mockRejectedValueOnce(handlerError);
       }
+
       const onError = vi.fn().mockRejectedValue(new Error("observer failure"));
       const channel = telegram({
         api: fake.api,
@@ -671,10 +683,12 @@ describe("TelegramChannel", () => {
 
       try {
         await channel.start(handler);
+
         if (retryHandler) {
           await expect(channel.receiveWebhook(update, "webhook_secret")).rejects.toBe(handlerError);
           expect(onError).toHaveBeenCalledWith(handlerError, { operation: "handle", update });
         }
+
         await channel.receiveWebhook(update, "webhook_secret");
         await channel.receiveWebhook(update, "webhook_secret");
 
@@ -706,14 +720,22 @@ describe("TelegramChannel", () => {
       });
       const onError = vi.fn(() => observer);
       const handler = vi.fn(async () => undefined);
-      const channel = telegram({
-        api: fake.api,
-        ...(transport === "webhook" ? { webhook: { secretToken: "webhook_secret" } } : {}),
-        onError,
-      });
+      const channel = telegram(
+        transport === "webhook"
+          ? {
+              api: fake.api,
+              webhook: { secretToken: "webhook_secret" },
+              onError,
+            }
+          : {
+              api: fake.api,
+              onError,
+            },
+      );
 
       try {
         await channel.start(handler);
+
         if (transport === "webhook") {
           const delivered = vi.fn();
           const delivery = channel.receiveWebhook(update, "webhook_secret").then(delivered);
@@ -725,6 +747,7 @@ describe("TelegramChannel", () => {
           await vi.waitFor(() => expect(fake.getUpdates).toHaveBeenCalledTimes(2));
           expect(fake.getUpdates.mock.lastCall?.[0].offset).toBe(22);
         }
+
         expect(handler.mock.calls).toEqual([
           [expect.objectContaining({ type: "action", id: "20" })],
           [expect.objectContaining({ type: "message", id: "21" })],
@@ -732,7 +755,6 @@ describe("TelegramChannel", () => {
         expect(onError).toHaveBeenCalledExactlyOnceWith(ackError, { operation: "handle", update });
         await channel.stop();
       } finally {
-        // Reject after delivery and shutdown to also guard against unhandled rejections.
         rejectObserver(new Error("delayed observer failure"));
         await channel.stop();
       }
@@ -758,7 +780,7 @@ describe("TelegramChannel", () => {
       await expect(channel.receiveWebhook(poison, "webhook_secret")).rejects.toThrow(
         "always fails",
       );
-      // After the final attempt the update is reported and dropped, so this resolves 2xx.
+
       await channel.receiveWebhook(poison, "webhook_secret");
       await channel.receiveWebhook(poison, "webhook_secret");
 
@@ -937,7 +959,6 @@ describe("TelegramChannel", () => {
       await telegram({ api: fake.api }).unreact(sent, "👀");
       expect(fake.setMessageReaction).toHaveBeenCalledOnce();
 
-      // Topics do not change a message's identity within its chat.
       await channel.unreact({ ...sent, address: { ...sent.address, threadId: "5" } }, "👀");
       expect(fake.setMessageReaction).toHaveBeenCalledTimes(2);
       expect(fake.setMessageReaction).toHaveBeenLastCalledWith({
@@ -962,7 +983,7 @@ describe("TelegramChannel", () => {
       const second = channel.react(sent, "👍");
       const removal = channel.unreact(sent, "👀");
       await vi.waitFor(() => expect(fake.setMessageReaction).toHaveBeenCalledOnce());
-      // A blocked message must not block another message's reaction.
+
       await channel.react({ ...sent, id: "78" }, "❤️");
       expect(fake.setMessageReaction).toHaveBeenCalledTimes(2);
       finishFirst();
@@ -1039,6 +1060,7 @@ describe("TelegramChannel", () => {
       },
     };
     const event = normalizeTelegramUpdate(update, bot)[0];
+
     if (event?.type !== "message" || event.attachments[0] === undefined) {
       throw new Error("Expected a normalized attachment");
     }
@@ -1191,6 +1213,7 @@ function waitForAbort(
       resolve({ updates: [], invalid: [] });
       return;
     }
+
     signal?.addEventListener("abort", () => resolve({ updates: [], invalid: [] }), { once: true });
   });
 }

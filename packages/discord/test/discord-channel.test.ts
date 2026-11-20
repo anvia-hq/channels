@@ -162,6 +162,7 @@ describe("DiscordChannel", () => {
         ],
       }),
     );
+
     if (event === undefined || event.attachments[0] === undefined) {
       throw new Error("Expected a normalized attachment");
     }

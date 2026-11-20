@@ -6,6 +6,7 @@
     "moduleResolution": "Bundler",
     "paths": {
       "@anvia/channel": ["./packages/channel/src/index.ts"],
+      "@anvia/channel/adapter": ["./packages/channel/src/adapter.ts"],
       "@anvia/channel-agent": ["./packages/channel-agent/src/index.ts"],
       "@anvia/discord": ["./packages/discord/src/index.ts"],
       "@anvia/slack": ["./packages/slack/src/index.ts"],

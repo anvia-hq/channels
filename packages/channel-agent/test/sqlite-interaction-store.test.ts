@@ -17,7 +17,9 @@ describe("SqliteChannelAgentInteractionStore", () => {
 
   it("persists and atomically takes a continuation", () => {
     const outcome = agentApproval();
+
     if (outcome.type !== "interaction") throw new Error("Expected an interaction outcome");
+
     const pending = {
       continuation: outcome.continuation,
       interaction: outcome.interaction,
@@ -38,7 +40,9 @@ describe("SqliteChannelAgentInteractionStore", () => {
 
   it("treats expired pending interactions as absent", () => {
     const outcome = agentApproval();
+
     if (outcome.type !== "interaction") throw new Error("Expected an interaction outcome");
+
     const expired = {
       continuation: outcome.continuation,
       interaction: outcome.interaction,
@@ -78,7 +82,9 @@ describe("SqliteChannelAgentInteractionStore", () => {
 
   it("persists continuations across close and reopen", () => {
     const outcome = agentApproval();
+
     if (outcome.type !== "interaction") throw new Error("Expected an interaction outcome");
+
     const pending = { continuation: outcome.continuation, interaction: outcome.interaction };
     const directory = mkdtempSync(join(tmpdir(), "anvia-channel-agent-"));
     temporaryDirectories.push(directory);

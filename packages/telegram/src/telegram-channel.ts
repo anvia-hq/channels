@@ -1,3 +1,4 @@
+import { timingSafeEqual } from "node:crypto";
 import type {
   Channel,
   ChannelAddress,
@@ -8,17 +9,20 @@ import type {
   ChannelMessageEvent,
   SentChannelMessage,
 } from "@anvia/channel";
-import { splitChannelMessage, validateChannelMessage } from "@anvia/channel";
+import { splitChannelMessage } from "@anvia/channel";
 import {
-  TelegramApiError,
-  createTelegramBotApiClient,
-  parseTelegramUpdate,
-} from "./bot-api-client.js";
+  BoundedMap,
+  BoundedSet,
+  reportChannelError,
+  validateOutboundChannelMessage,
+} from "@anvia/channel/adapter";
+import type { Mutable } from "@anvia/channel/adapter";
+import { createTelegramBotApiClient, parseTelegramUpdate } from "./bot-api-client.js";
 import { normalizeTelegramUpdate } from "./normalize.js";
 import type { TelegramNormalizationOptions } from "./normalize.js";
+import { pollTelegramUpdates } from "./polling.js";
 import type {
   TelegramBotApi,
-  TelegramGetUpdatesRequest,
   TelegramSendAttachmentRequest,
   TelegramSendChatActionRequest,
   TelegramSendMessageRequest,
@@ -34,8 +38,6 @@ const MAX_MESSAGE_LENGTH = 4_096;
 const MAX_REMEMBERED_UPDATES = 1_000;
 const MAX_REMEMBERED_REACTIONS = 1_000;
 
-type Mutable<T> = { -readonly [Key in keyof T]: T[Key] };
-
 export type TelegramPollingOptions = Readonly<{
   timeoutSeconds?: number;
   retryDelayMs?: number;
@@ -45,35 +47,20 @@ export type TelegramPollingOptions = Readonly<{
 export type TelegramChannelErrorContext = Readonly<{
   operation: "poll" | "handle";
   update?: TelegramUpdate;
-  /** Bot API error_code when the failure originated from Telegram itself. */
+
   errorCode?: number;
-  /**
-   * True when the failing update was dropped after exhausting its handler attempts.
-   * The update has been reported through the existing error path and skipped.
-   */
+
   poisoned?: boolean;
 }>;
 
 export type TelegramWebhookOptions = Readonly<{
-  /** Value expected from Telegram's X-Telegram-Bot-Api-Secret-Token header. */
   secretToken: string;
 }>;
 
 type TelegramChannelCommonOptions = Readonly<{
   polling?: TelegramPollingOptions;
   webhook?: TelegramWebhookOptions;
-  /**
-   * Maximum handler attempts for the same update before it is treated as poison
-   * and skipped. Must be a positive integer; defaults to 10.
-   *
-   * In polling mode, handler retries back off exponentially from `retryDelayMs`
-   * (1s, 2s, 4s, ... capped at 30s), so the default tolerates roughly 2.5 minutes
-   * of consecutive failures before dropping the update. In webhook mode the delay
-   * between attempts follows Telegram's redelivery schedule.
-   *
-   * A dropped update is reported through `onError` with `poisoned: true`. Set
-   * `onError` to observe drops; without it, discards are silent.
-   */
+
   maxHandlerAttempts?: number;
   onError?: (error: unknown, context: TelegramChannelErrorContext) => void | Promise<void>;
 }>;
@@ -124,16 +111,17 @@ export class TelegramChannel implements Channel<TelegramUpdate> {
   private loop: Promise<void> | undefined;
   private handler: ChannelEventHandler<TelegramUpdate> | undefined;
   private bot: TelegramUser | undefined;
-  private readonly handledWebhookUpdates = new Set<number>();
+  private readonly handledWebhookUpdates = new BoundedSet<number>(MAX_REMEMBERED_UPDATES);
   private readonly webhookDeliveries = new Map<number, Promise<void>>();
-  private readonly webhookAttempts = new Map<number, number>();
-  private readonly reactions = new Map<string, string>();
+  private readonly webhookAttempts = new BoundedMap<number, number>(MAX_REMEMBERED_UPDATES);
+  private readonly reactions = new BoundedMap<string, string>(MAX_REMEMBERED_REACTIONS);
   private readonly reactionWrites = new Map<string, Promise<void>>();
 
   constructor(options: TelegramChannelOptions) {
     if (options.webhook !== undefined && options.polling !== undefined) {
       throw new TypeError("Telegram polling and webhook options are mutually exclusive");
     }
+
     if (options.api !== undefined && options.api !== null) {
       this.api = options.api;
     } else {
@@ -143,13 +131,18 @@ export class TelegramChannel implements Channel<TelegramUpdate> {
         fetch?: typeof globalThis.fetch;
         maximumAttachmentBytes?: number;
       } = { token: options.token };
+
       if (options.baseUrl !== undefined) clientOptions.baseUrl = options.baseUrl;
+
       if (options.fetch !== undefined) clientOptions.fetch = options.fetch;
+
       if (options.maximumAttachmentBytes !== undefined) {
         clientOptions.maximumAttachmentBytes = options.maximumAttachmentBytes;
       }
+
       this.api = createTelegramBotApiClient(clientOptions);
     }
+
     this.polling = resolvePollingOptions(options.polling);
     this.normalization = { allowBareGroupCommands: options.allowBareGroupCommands === true };
     this.webhook = resolveWebhookOptions(options.webhook);
@@ -171,6 +164,7 @@ export class TelegramChannel implements Channel<TelegramUpdate> {
 
   async start(handler: ChannelEventHandler<TelegramUpdate>): Promise<void> {
     if (this.controller !== undefined) throw new Error("Telegram channel is already running");
+
     if (typeof handler !== "function") throw new TypeError("Telegram event handler is required");
 
     const controller = new AbortController();
@@ -180,6 +174,7 @@ export class TelegramChannel implements Channel<TelegramUpdate> {
       bot = await this.api.getMe(controller.signal);
     } catch (error) {
       if (this.controller === controller) this.controller = undefined;
+
       throw error;
     }
 
@@ -189,7 +184,17 @@ export class TelegramChannel implements Channel<TelegramUpdate> {
       return;
     }
 
-    this.loop = this.poll(handler, bot, controller.signal).finally(() => {
+    this.loop = pollTelegramUpdates({
+      api: this.api,
+      polling: this.polling,
+      maxHandlerAttempts: this.maxHandlerAttempts,
+      normalization: this.normalization,
+      handler,
+      bot,
+      signal: controller.signal,
+      acknowledgeCallbackQuery: (update, signal) => this.acknowledgeCallbackQuery(update, signal),
+      reportError: (error, context) => this.reportError(error, context),
+    }).finally(() => {
       if (this.controller === controller) {
         this.controller = undefined;
         this.loop = undefined;
@@ -200,11 +205,15 @@ export class TelegramChannel implements Channel<TelegramUpdate> {
   async stop(): Promise<void> {
     const controller = this.controller;
     const loop = this.loop;
+
     if (controller === undefined) return;
+
     controller.abort();
     await loop;
     await Promise.allSettled(this.webhookDeliveries.values());
+
     if (this.controller === controller) this.controller = undefined;
+
     this.handler = undefined;
     this.bot = undefined;
     this.webhookAttempts.clear();
@@ -212,20 +221,29 @@ export class TelegramChannel implements Channel<TelegramUpdate> {
 
   async receiveWebhook(value: unknown, secretToken?: string): Promise<void> {
     const webhook = this.webhook;
+
     if (webhook === undefined) throw new Error("Telegram webhook transport is not configured");
+
     const controller = this.controller;
     const handler = this.handler;
     const bot = this.bot;
+
     if (controller === undefined || handler === undefined || bot === undefined) {
       throw new Error("Telegram channel is not running");
     }
+
     if (!sameSecret(webhook.secretToken, secretToken)) {
       throw new Error("Telegram webhook secret token is invalid");
     }
+
     const update = parseTelegramUpdate(value);
+
     if (this.handledWebhookUpdates.has(update.update_id)) return;
+
     const existingDelivery = this.webhookDeliveries.get(update.update_id);
+
     if (existingDelivery !== undefined) return existingDelivery;
+
     const delivery = Promise.resolve().then(() =>
       this.deliverWebhookUpdate(update, handler, bot, controller),
     );
@@ -239,40 +257,6 @@ export class TelegramChannel implements Channel<TelegramUpdate> {
     }
   }
 
-  private async deliverWebhookUpdate(
-    update: TelegramUpdate,
-    handler: ChannelEventHandler<TelegramUpdate>,
-    bot: TelegramUser,
-    controller: AbortController,
-  ): Promise<void> {
-    await this.acknowledgeCallbackQuery(update, controller.signal);
-    if (controller.signal.aborted) return;
-    const events = normalizeTelegramUpdate(update, bot, this.normalization).filter(
-      (event) => !("sender" in event) || !event.sender.bot,
-    );
-    if (events.length === 0) {
-      rememberUpdate(this.handledWebhookUpdates, update.update_id);
-      return;
-    }
-    try {
-      for (const event of events) await handler(event);
-      rememberUpdate(this.handledWebhookUpdates, update.update_id);
-      this.webhookAttempts.delete(update.update_id);
-    } catch (error) {
-      const attempts = (this.webhookAttempts.get(update.update_id) ?? 0) + 1;
-      if (attempts >= this.maxHandlerAttempts) {
-        // Drop the poison update and report it so Telegram stops retrying it.
-        this.webhookAttempts.delete(update.update_id);
-        rememberUpdate(this.handledWebhookUpdates, update.update_id);
-        await this.reportError(error, { operation: "handle", update, poisoned: true });
-        return;
-      }
-      rememberAttempt(this.webhookAttempts, update.update_id, attempts);
-      await this.reportError(error, { operation: "handle", update });
-      throw error;
-    }
-  }
-
   async send(address: ChannelAddress, message: ChannelMessage): Promise<SentChannelMessage> {
     validateAddress(address);
     validateMessage(message);
@@ -283,36 +267,50 @@ export class TelegramChannel implements Channel<TelegramUpdate> {
       "Telegram reply message ID",
     );
     let sent: Awaited<ReturnType<TelegramBotApi["sendMessage"]>> | undefined;
+
     if (message.text.length > 0) {
       const request: Mutable<TelegramSendMessageRequest> = {
         chat_id: target,
         text: message.text,
       };
+
       if (threadId !== undefined) request.message_thread_id = threadId;
+
       if (replyMessageId !== undefined) {
         request.reply_parameters = { message_id: replyMessageId };
       }
+
       const replyMarkup = telegramReplyMarkup(message);
+
       if ("reply_markup" in replyMarkup) request.reply_markup = replyMarkup.reply_markup;
+
       sent = await this.api.sendMessage(request);
     }
+
     for (const [index, attachment] of (message.attachments ?? []).entries()) {
       const request: Mutable<TelegramSendAttachmentRequest> = {
         chat_id: target,
         attachment,
       };
+
       if (threadId !== undefined) request.message_thread_id = threadId;
+
       if (sent === undefined && replyMessageId !== undefined) {
         request.reply_parameters = { message_id: replyMessageId };
       }
+
       if (sent === undefined && index === 0) {
         const replyMarkup = telegramReplyMarkup(message);
+
         if ("reply_markup" in replyMarkup) request.reply_markup = replyMarkup.reply_markup;
       }
+
       const mediaMessage = await this.api.sendAttachment(request);
       sent ??= mediaMessage;
     }
+
     if (sent === undefined) throw new Error("Telegram message did not produce a sent message");
+
     const sentAddress: {
       platform: string;
       accountId?: string;
@@ -322,9 +320,13 @@ export class TelegramChannel implements Channel<TelegramUpdate> {
       platform: this.platform,
       conversationId: String(sent.chat.id),
     };
+
     if (address.accountId !== undefined) sentAddress.accountId = address.accountId;
+
     const sentThreadId = sent.message_thread_id ?? threadId;
+
     if (sentThreadId !== undefined) sentAddress.threadId = String(sentThreadId);
+
     return {
       id: String(sent.message_id),
       address: sentAddress,
@@ -332,11 +334,13 @@ export class TelegramChannel implements Channel<TelegramUpdate> {
   }
 
   async edit(sent: SentChannelMessage, message: ChannelMessage): Promise<void> {
-    validateAddress(sent.address);
+    validateSentMessage(sent);
     validateMessage(message);
+
     if (message.attachments !== undefined || message.replyToMessageId !== undefined) {
       throw new TypeError("Telegram message attachments and replies cannot be edited");
     }
+
     await this.api.editMessageText({
       chat_id: chatId(sent.address.conversationId),
       message_id: positiveInteger(sent.id, "Telegram message ID"),
@@ -360,7 +364,9 @@ export class TelegramChannel implements Channel<TelegramUpdate> {
       chat_id: chatId(address.conversationId),
       action: "typing",
     };
+
     if (threadId !== undefined) request.message_thread_id = threadId;
+
     await this.api.sendChatAction(request);
   }
 
@@ -372,15 +378,56 @@ export class TelegramChannel implements Channel<TelegramUpdate> {
     await this.updateReaction(sent, reaction, true);
   }
 
+  private async deliverWebhookUpdate(
+    update: TelegramUpdate,
+    handler: ChannelEventHandler<TelegramUpdate>,
+    bot: TelegramUser,
+    controller: AbortController,
+  ): Promise<void> {
+    await this.acknowledgeCallbackQuery(update, controller.signal);
+
+    if (controller.signal.aborted) return;
+
+    const events = normalizeTelegramUpdate(update, bot, this.normalization).filter(
+      (event) => !("sender" in event) || !event.sender.bot,
+    );
+
+    if (events.length === 0) {
+      this.handledWebhookUpdates.add(update.update_id);
+      return;
+    }
+
+    try {
+      for (const event of events) await handler(event);
+      this.handledWebhookUpdates.add(update.update_id);
+      this.webhookAttempts.delete(update.update_id);
+    } catch (error) {
+      const attempts = (this.webhookAttempts.get(update.update_id) ?? 0) + 1;
+
+      if (attempts >= this.maxHandlerAttempts) {
+        this.webhookAttempts.delete(update.update_id);
+        this.handledWebhookUpdates.add(update.update_id);
+        await this.reportError(error, { operation: "handle", update, poisoned: true });
+        return;
+      }
+
+      this.webhookAttempts.set(update.update_id, attempts);
+      await this.reportError(error, { operation: "handle", update });
+      throw error;
+    }
+  }
+
   private async updateReaction(
     sent: SentChannelMessage,
     reaction: string,
     remove: boolean,
   ): Promise<void> {
     validateSentMessage(sent);
+
     if (typeof reaction !== "string" || reaction.length === 0) {
       throw new TypeError("Telegram reaction must not be empty");
     }
+
     const target = chatId(sent.address.conversationId);
     const messageId = positiveInteger(sent.id, "Telegram message ID");
     const key = JSON.stringify([
@@ -388,9 +435,10 @@ export class TelegramChannel implements Channel<TelegramUpdate> {
       messageId,
     ]);
     const previous = this.reactionWrites.get(key) ?? Promise.resolve();
-    // Serialize the check and write: Telegram replaces the bot's single reaction.
+
     const write = previous.then(async () => {
       if (remove && this.reactions.get(key) !== reaction) return;
+
       try {
         await this.api.setMessageReaction({
           chat_id: target,
@@ -398,20 +446,17 @@ export class TelegramChannel implements Channel<TelegramUpdate> {
           reaction: remove ? [] : [{ type: "emoji", emoji: reaction }],
         });
       } catch (error) {
-        // A lost response can leave remote state different from our last success.
         this.reactions.delete(key);
         throw error;
       }
-      this.reactions.delete(key);
-      if (!remove) {
+
+      if (remove) {
+        this.reactions.delete(key);
+      } else {
         this.reactions.set(key, reaction);
-        if (this.reactions.size > MAX_REMEMBERED_REACTIONS) {
-          const oldest = this.reactions.keys().next().value;
-          if (oldest !== undefined) this.reactions.delete(oldest);
-        }
       }
     });
-    // A rejected write must still allow subsequent operations on this message.
+
     const settled = write.catch(() => {});
     this.reactionWrites.set(key, settled);
     try {
@@ -421,119 +466,21 @@ export class TelegramChannel implements Channel<TelegramUpdate> {
     }
   }
 
-  private async poll(
-    handler: ChannelEventHandler<TelegramUpdate>,
-    bot: TelegramUser,
-    signal: AbortSignal,
-  ): Promise<void> {
-    let offset: number | undefined;
-    const handledUpdates = new Set<number>();
-    const handlerAttempts = new Map<number, number>();
-    let pollFailures = 0;
-
-    while (!signal.aborted) {
-      let updates: readonly TelegramUpdate[];
-      let malformedOffset: number | undefined;
-      try {
-        const request: Mutable<TelegramGetUpdatesRequest> = {
-          limit: this.polling.limit,
-          timeout: this.polling.timeoutSeconds,
-          allowed_updates: ["message", "edited_message", "message_reaction", "callback_query"],
-        };
-        if (offset !== undefined) request.offset = offset;
-        const batch = await this.api.getUpdates(request, signal);
-        updates = [...batch.updates].sort((left, right) => left.update_id - right.update_id);
-        pollFailures = 0;
-        for (const invalid of batch.invalid) {
-          await this.reportError(invalid.error, { operation: "poll" });
-          if (invalid.updateId !== undefined) {
-            malformedOffset = nextOffset(malformedOffset, invalid.updateId);
-          }
-        }
-      } catch (error) {
-        if (signal.aborted) break;
-        pollFailures += 1;
-        const context: Mutable<TelegramChannelErrorContext> = { operation: "poll" };
-        if (error instanceof TelegramApiError && error.errorCode !== undefined) {
-          context.errorCode = error.errorCode;
-        }
-        await this.reportError(error, context);
-        await abortableDelay(retryDelay(error, this.polling.retryDelayMs, pollFailures), signal);
-        continue;
-      }
-
-      let handlerFailed = false;
-      let handlerRetryDelayMs = this.polling.retryDelayMs;
-      for (const update of updates) {
-        if (signal.aborted) break;
-        if (handledUpdates.has(update.update_id)) {
-          offset = nextOffset(offset, update.update_id);
-          continue;
-        }
-
-        await this.acknowledgeCallbackQuery(update, signal);
-        if (signal.aborted) break;
-        const events = normalizeTelegramUpdate(update, bot, this.normalization).filter(
-          (event) => !("sender" in event) || !event.sender.bot,
-        );
-        if (events.length === 0) {
-          offset = nextOffset(offset, update.update_id);
-          rememberUpdate(handledUpdates, update.update_id);
-          continue;
-        }
-
-        try {
-          for (const event of events) await handler(event);
-          offset = nextOffset(offset, update.update_id);
-          rememberUpdate(handledUpdates, update.update_id);
-          handlerAttempts.delete(update.update_id);
-        } catch (error) {
-          const attempts = (handlerAttempts.get(update.update_id) ?? 0) + 1;
-          if (attempts >= this.maxHandlerAttempts) {
-            // Skip the poison update so one failing update cannot stall the batch.
-            handlerAttempts.delete(update.update_id);
-            offset = nextOffset(offset, update.update_id);
-            rememberUpdate(handledUpdates, update.update_id);
-            await this.reportError(error, { operation: "handle", update, poisoned: true });
-            continue;
-          }
-          handlerAttempts.set(update.update_id, attempts);
-          await this.reportError(error, { operation: "handle", update });
-          handlerFailed = true;
-          handlerRetryDelayMs = backoffDelay(this.polling.retryDelayMs, attempts);
-          break;
-        }
-      }
-
-      // A malformed later entry must not acknowledge an earlier failed handler.
-      if (!handlerFailed && !signal.aborted && malformedOffset !== undefined) {
-        offset = Math.max(offset ?? malformedOffset, malformedOffset);
-      }
-      if (handlerFailed && !signal.aborted) {
-        await abortableDelay(handlerRetryDelayMs, signal);
-      }
-    }
-  }
-
   private async acknowledgeCallbackQuery(
     update: TelegramUpdate,
     signal: AbortSignal,
   ): Promise<void> {
     if (update.callback_query === undefined) return;
+
     try {
       await this.api.answerCallbackQuery({ callback_query_id: update.callback_query.id }, signal);
     } catch (error) {
-      // Error observation must not delay delivery or retries; reportError contains rejections.
       if (!signal.aborted) void this.reportError(error, { operation: "handle", update });
     }
   }
 
-  private async reportError(error: unknown, context: TelegramChannelErrorContext): Promise<void> {
-    try {
-      await this.onError?.(error, context);
-    } catch {
-      // Error observers must not terminate message delivery.
-    }
+  private reportError(error: unknown, context: TelegramChannelErrorContext): Promise<void> {
+    return reportChannelError(this.onError, error, context);
   }
 }
 
@@ -555,6 +502,7 @@ function resolvePollingOptions(
 
 function resolveMaxHandlerAttempts(value: number | undefined): number {
   if (value === undefined) return DEFAULT_MAX_HANDLER_ATTEMPTS;
+
   return positiveInteger(value, "Telegram maximum handler attempts");
 }
 
@@ -562,9 +510,11 @@ function resolveWebhookOptions(
   options: TelegramWebhookOptions | undefined,
 ): Readonly<{ secretToken: string }> | undefined {
   if (options === undefined) return undefined;
+
   if (!/^[A-Za-z0-9_-]{1,256}$/.test(options.secretToken)) {
     throw new TypeError("Telegram webhook secret token is invalid");
   }
+
   return { secretToken: options.secretToken };
 }
 
@@ -572,21 +522,16 @@ function validateAddress(address: ChannelAddress): void {
   if (address.platform !== "telegram") {
     throw new TypeError(`Telegram channel cannot use a ${address.platform} address`);
   }
+
   chatId(address.conversationId);
   optionalPositiveInteger(address.threadId, "Telegram thread ID");
 }
 
 function validateMessage(message: ChannelMessage): void {
-  if (
-    typeof message.text !== "string" ||
-    (message.text.length === 0 && message.attachments === undefined)
-  ) {
-    throw new TypeError("Telegram message must include text or attachments");
-  }
-  if (message.text.length > MAX_MESSAGE_LENGTH) {
-    throw new RangeError(`Telegram message text must not exceed ${MAX_MESSAGE_LENGTH} characters`);
-  }
-  validateChannelMessage(message);
+  validateOutboundChannelMessage(message, {
+    platformLabel: "Telegram",
+    maximumLength: MAX_MESSAGE_LENGTH,
+  });
   optionalPositiveInteger(message.replyToMessageId, "Telegram reply message ID");
 }
 
@@ -597,6 +542,7 @@ function validateSentMessage(sent: SentChannelMessage): void {
 
 function sameSecret(expected: string, actual: string | undefined): boolean {
   if (actual === undefined) return false;
+
   const expectedBytes = Buffer.from(expected);
   const actualBytes = Buffer.from(actual);
   return expectedBytes.length === actualBytes.length && timingSafeEqual(expectedBytes, actualBytes);
@@ -615,6 +561,7 @@ function telegramReplyMarkup(
   if (message.actions === undefined) {
     return editing ? { reply_markup: { inline_keyboard: [] } } : {};
   }
+
   return {
     reply_markup: {
       inline_keyboard: [
@@ -626,7 +573,9 @@ function telegramReplyMarkup(
 
 function chatId(value: string): number | string {
   if (/^-?\d+$/.test(value)) return safeInteger(value, "Telegram chat ID");
+
   if (/^@[A-Za-z][A-Za-z0-9_]{3,}$/.test(value)) return value;
+
   throw new TypeError("Telegram conversation ID must be a numeric chat ID or @username");
 }
 
@@ -636,8 +585,11 @@ function optionalPositiveInteger(value: string | undefined, label: string): numb
 
 function positiveInteger(value: string | number, label: string): number {
   const parsed = typeof value === "number" ? value : safeInteger(value, label);
-  if (!Number.isSafeInteger(parsed) || parsed <= 0)
+
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) {
     throw new TypeError(`${label} must be positive`);
+  }
+
   return parsed;
 }
 
@@ -645,6 +597,7 @@ function nonnegativeInteger(value: number, label: string): number {
   if (!Number.isSafeInteger(value) || value < 0) {
     throw new TypeError(`${label} must be a nonnegative integer`);
   }
+
   return value;
 }
 
@@ -652,58 +605,14 @@ function integerInRange(value: number, minimum: number, maximum: number, label: 
   if (!Number.isSafeInteger(value) || value < minimum || value > maximum) {
     throw new TypeError(`${label} must be an integer between ${minimum} and ${maximum}`);
   }
+
   return value;
 }
 
 function safeInteger(value: string, label: string): number {
   const parsed = Number(value);
+
   if (!Number.isSafeInteger(parsed)) throw new TypeError(`${label} must be a safe integer`);
+
   return parsed;
 }
-
-function nextOffset(current: number | undefined, updateId: number): number {
-  return Math.max(current ?? 0, updateId + 1);
-}
-
-function rememberUpdate(updates: Set<number>, updateId: number): void {
-  updates.add(updateId);
-  if (updates.size <= MAX_REMEMBERED_UPDATES) return;
-  const oldest = updates.values().next().value;
-  if (oldest !== undefined) updates.delete(oldest);
-}
-
-const MAX_RETRY_DELAY_MS = 30_000;
-
-function retryDelay(error: unknown, fallback: number, attempt: number): number {
-  if (error instanceof TelegramApiError && error.retryAfterSeconds !== undefined) {
-    return error.retryAfterSeconds * 1_000;
-  }
-  return backoffDelay(fallback, attempt);
-}
-
-function backoffDelay(baseMs: number, attempt: number): number {
-  return Math.min(baseMs * 2 ** (attempt - 1), MAX_RETRY_DELAY_MS);
-}
-
-function rememberAttempt(attempts: Map<number, number>, updateId: number, count: number): void {
-  attempts.delete(updateId);
-  attempts.set(updateId, count);
-  if (attempts.size <= MAX_REMEMBERED_UPDATES) return;
-  const oldest = attempts.keys().next().value;
-  if (oldest !== undefined) attempts.delete(oldest);
-}
-
-function abortableDelay(milliseconds: number, signal: AbortSignal): Promise<void> {
-  if (signal.aborted || milliseconds === 0) return Promise.resolve();
-  return new Promise((resolve) => {
-    const timer = setTimeout(finish, milliseconds);
-    signal.addEventListener("abort", finish, { once: true });
-
-    function finish() {
-      clearTimeout(timer);
-      signal.removeEventListener("abort", finish);
-      resolve();
-    }
-  });
-}
-import { timingSafeEqual } from "node:crypto";

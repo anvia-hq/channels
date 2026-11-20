@@ -10,13 +10,17 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./adapter": {
+      "types": "./dist/adapter.d.ts",
+      "import": "./dist/adapter.js"
     }
   },
   "files": [
     "dist"
   ],
   "scripts": {
-    "build": "tsup src/index.ts --target node24 --format esm --sourcemap --clean && tsc -p tsconfig.build.json",
+    "build": "tsup src/index.ts src/adapter.ts --target node24 --format esm --sourcemap --clean && tsc -p tsconfig.build.json",
     "test": "vitest run --passWithNoTests",
     "typecheck": "tsc --noEmit"
   },

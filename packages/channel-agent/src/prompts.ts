@@ -1,4 +1,5 @@
 import type { AgentPrompt, UserContentPart } from "@anvia/core";
+import { base64ByteLength } from "@anvia/channel/adapter";
 import type {
   Channel,
   ChannelAttachment,
@@ -23,17 +24,21 @@ export async function channelMessagePrompt<RawEvent>(
   options: ChannelMessagePromptOptions<RawEvent>,
 ): Promise<AgentPrompt> {
   const { channel, event, signal } = options;
+
   if (event.attachments.length === 0) return event.text;
 
   const policy = resolveMultimodalOptions(options);
   validateAttachmentMetadata(event.attachments, policy);
   const loadAttachment = channel.loadAttachment;
+
   if (loadAttachment === undefined) {
     throw new TypeError(`Channel ${channel.platform} does not support attachment loading`);
   }
 
   const content: UserContentPart[] = [];
+
   if (event.text.length > 0) content.push({ type: "text", text: event.text });
+
   const data = await loadAttachments(
     event.attachments,
     policy.attachmentConcurrency,
@@ -42,7 +47,9 @@ export async function channelMessagePrompt<RawEvent>(
   );
   for (const [index, attachment] of event.attachments.entries()) {
     const attachmentData = data[index];
+
     if (attachmentData === undefined) throw new Error(`Channel attachment ${index} was not loaded`);
+
     if (attachment.type === "image") {
       content.push({
         type: "image",
@@ -51,6 +58,7 @@ export async function channelMessagePrompt<RawEvent>(
       });
       continue;
     }
+
     const file: {
       type: "file";
       data: ChannelAttachmentData;
@@ -61,7 +69,9 @@ export async function channelMessagePrompt<RawEvent>(
       data: attachmentData,
       mediaType: attachment.mediaType,
     };
+
     if (attachment.filename !== undefined) file.filename = attachment.filename;
+
     content.push(file);
   }
   return { role: "user", content };
@@ -97,15 +107,19 @@ function validateAttachmentMetadata(
   let knownTotal = 0;
   for (const attachment of attachments) {
     if (attachment.size === undefined) continue;
+
     if (!Number.isSafeInteger(attachment.size) || attachment.size < 0) {
       throw new TypeError("Channel attachment size must be a nonnegative integer");
     }
+
     if (attachment.size > policy.maximumAttachmentBytes) {
       throw new RangeError(
         `Channel attachment must not exceed ${policy.maximumAttachmentBytes} bytes`,
       );
     }
+
     knownTotal += attachment.size;
+
     if (knownTotal > policy.maximumTotalAttachmentBytes) {
       throw new RangeError(
         `Channel attachments must not exceed ${policy.maximumTotalAttachmentBytes} bytes in total`,
@@ -128,20 +142,25 @@ async function loadAttachments(
   const worker = async (): Promise<void> => {
     while (failure === undefined) {
       const index = nextIndex;
+
       if (index >= attachments.length) return;
+
       nextIndex += 1;
       const attachment = attachments[index];
+
       if (attachment === undefined) return;
 
       try {
         const loaded = await load(attachment);
         const bytes = attachmentDataBytes(loaded, attachment, policy.maximumAttachmentBytes);
         totalBytes += bytes;
+
         if (totalBytes > policy.maximumTotalAttachmentBytes) {
           throw new RangeError(
             `Channel attachments must not exceed ${policy.maximumTotalAttachmentBytes} bytes in total`,
           );
         }
+
         result[index] = loaded;
       } catch (error) {
         failure = error;
@@ -151,7 +170,9 @@ async function loadAttachments(
 
   const workerCount = Math.min(concurrency, attachments.length);
   await Promise.all(Array.from({ length: workerCount }, worker));
+
   if (failure !== undefined) throw failure;
+
   return result;
 }
 
@@ -164,27 +185,17 @@ function attachmentDataBytes(
     if (attachment.size === undefined) {
       throw new TypeError("URL-backed channel attachments must include their byte size");
     }
+
     return attachment.size;
   }
 
-  const bytes = base64Bytes(data.data, maximumBytes);
+  const bytes = base64ByteLength(data.data, { allowEmpty: true, maximumBytes });
+
   if (bytes > maximumBytes) {
     throw new RangeError(`Channel attachment must not exceed ${maximumBytes} bytes`);
   }
-  return bytes;
-}
 
-function base64Bytes(value: string, maximumBytes: number): number {
-  const maximumCharacters = Math.ceil(maximumBytes / 3) * 4;
-  if (value.length > maximumCharacters) return maximumBytes + 1;
-  if (
-    value.length % 4 !== 0 ||
-    !/^(?:[A-Za-z\d+/]{4})*(?:[A-Za-z\d+/]{2}==|[A-Za-z\d+/]{3}=)?$/.test(value)
-  ) {
-    throw new TypeError("Channel attachment data must be valid base64");
-  }
-  const padding = value.endsWith("==") ? 2 : value.endsWith("=") ? 1 : 0;
-  return (value.length / 4) * 3 - padding;
+  return bytes;
 }
 
 function positiveInteger(value: number, label: string): void {

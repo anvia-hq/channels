@@ -161,6 +161,7 @@ test("registry errors during visibility polling fail immediately", async () => {
   const fake = fixture();
   fake.operations.published = async () => {
     if (fake.publications()) throw new Error("registry unavailable");
+
     return null;
   };
   await assert.rejects(releasePackages([agent], head, fake.operations), /registry unavailable/);
@@ -217,7 +218,9 @@ test("delayed visibility still rejects conflicting publication and tag revisions
     const fake = fixture();
     fake.operations.published = async () => {
       if (fake.operations.now() === 0) return null;
+
       if (conflict === "tag") fake.tags.set("@anvia/channel-agent@0.4.1", "wrong-revision");
+
       return { gitHead: conflict === "publication" ? "wrong-revision" : head };
     };
     await assert.rejects(releasePackages([agent], head, fake.operations), /different commit/);

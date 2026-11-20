@@ -31,7 +31,9 @@ export function fakeTransport(): FakeSlackTransport {
       channelId,
       timestamp: "1700000001.000002",
     };
+
     if (threadTimestamp !== undefined) sent.threadTimestamp = threadTimestamp;
+
     return sent;
   });
   const edit = vi.fn<SlackTransport["edit"]>(async () => undefined);
@@ -64,6 +66,7 @@ export function fakeTransport(): FakeSlackTransport {
     loadAttachment,
     async emit(message) {
       if (handler === undefined) throw new Error("Fake Slack transport is not running");
+
       await handler(message);
     },
   };
