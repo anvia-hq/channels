@@ -1,12 +1,10 @@
 {
   "$schema": "./node_modules/oxlint/configuration_schema.json",
-  "plugins": ["typescript", "unicorn", "oxc"],
+  "plugins": ["typescript", "unicorn", "oxc", "import"],
   "categories": {
-    "correctness": "error"
-  },
-  "rules": {
-    "eslint/no-useless-constructor": "error",
-    "typescript/no-explicit-any": "error"
+    "correctness": "error",
+    "suspicious": "error",
+    "perf": "error"
   },
   "ignorePatterns": [
     "node_modules",
@@ -15,6 +13,65 @@
     "coverage",
     "**/coverage",
     "pnpm-lock.yaml"
+  ],
+  "jsPlugins": ["./tooling/oxlint/anvia-plugin.mjs"],
+  "rules": {
+    "anvia/no-comments": "error",
+    "anvia/no-conditional-spread": "error",
+    "anvia/no-barrel-file": "error",
+    "anvia/padded-if": "error",
+    "anvia/no-reduce-accumulator-copy": "error",
+    "anvia/no-reflect-apply": "error",
+    "anvia/no-reflect-get": "error",
+    "anvia/no-array-filter-map": "error",
+    "anvia/no-chained-type-assertions": "error",
+    "anvia/no-unknown-type-aliases": "error",
+    "anvia/no-module-mocking": "error",
+    "eqeqeq": ["error", "smart"],
+    "eslint/no-useless-constructor": "error",
+    "import/no-duplicates": "error",
+    "no-inline-comments": "error",
+    "no-lonely-if": "error",
+    "no-nested-ternary": "error",
+    "no-useless-return": "error",
+    "no-var": "error",
+    "prefer-const": "error",
+    "typescript/consistent-type-imports": "error",
+    "typescript/no-explicit-any": "error",
+    "typescript/no-import-type-side-effects": "error",
+    "unicorn/prefer-includes": "error",
+    "unicorn/prefer-node-protocol": "error",
+    "unicorn/prefer-number-properties": "error",
+    "unicorn/prefer-structured-clone": "error",
+    "unicorn/throw-new-error": "error",
+    "oxc/no-accumulating-spread": "error",
+    "no-await-in-loop": "off",
+    "no-shadow": "off",
+    "no-underscore-dangle": "off",
+    "no-unmodified-loop-condition": "off",
+    "import/no-unassigned-import": "off",
+    "oxc/no-map-spread": "off",
+    "unicorn/consistent-function-scoping": "off",
+    "unicorn/no-array-fill-with-reference-type": "off",
+    "unicorn/no-array-reverse": "off",
+    "unicorn/no-array-sort": "off",
+    "unicorn/prefer-add-event-listener": "off",
+    "unicorn/prefer-array-find": "off",
+    "unicorn/prefer-set-has": "off"
+  },
+  "overrides": [
+    {
+      "files": ["packages/*/src/index.ts"],
+      "rules": {
+        "anvia/no-barrel-file": "off"
+      }
+    },
+    {
+      "files": ["**/*.test.ts", "**/*.test.tsx", "**/*.test.mjs"],
+      "rules": {
+        "anvia/no-chained-type-assertions": "off"
+      }
+    }
   ],
   "env": {
     "builtin": true

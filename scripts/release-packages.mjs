@@ -18,13 +18,16 @@ export async function planReleases(packages, head, operations, recorded) {
   ) {
     throw new Error("Recorded release plan does not match this revision and its public packages");
   }
+
   const selected = new Set(recorded?.packages.map(({ name, version }) => `${name}@${version}`));
   const plan = [];
   for (const pkg of packages) {
     if (pkg.private) continue;
+
     const tag = `${pkg.name}@${pkg.version}`;
     const published = await operations.published(pkg);
     const tagged = await operations.tagCommit(tag);
+
     if (
       published !== null &&
       selected.has(tag) &&
@@ -33,17 +36,22 @@ export async function planReleases(packages, head, operations, recorded) {
     ) {
       throw new Error(`${tag} was published from a different commit`);
     }
+
     if (published !== null && published.gitHead !== head && !selected.has(tag)) {
       // Historical publications stay associated with their original revision. Legacy v* tags
       // remain untouched; a missing gitHead cannot prove that a publication belongs to HEAD.
+
       if (published.gitHead && tagged && published.gitHead !== tagged) {
         throw new Error(`${tag} does not match the published revision`);
       }
+
       continue;
     }
+
     if (tagged !== null && tagged !== head) {
       throw new Error(`${tag} already points to a different commit`);
     }
+
     plan.push({ ...pkg, tag, publish: published === null });
   }
   return plan;
@@ -52,18 +60,25 @@ export async function planReleases(packages, head, operations, recorded) {
 /** Preflight the whole plan before any publication; every completed step is safe to retry. */
 export async function releasePackages(packages, head, operations, recorded) {
   const plan = await planReleases(packages, head, operations, recorded);
+
   if (plan.some((pkg) => pkg.publish)) await operations.publish();
+
   for (const pkg of plan) {
     const published = await waitForPublication(pkg, operations);
+
     if (published.gitHead && published.gitHead !== head) {
       throw new Error(`${pkg.tag} was published from a different commit`);
     }
+
     // Recheck after publication rather than allowing a concurrent tag change to be overwritten.
     const tagged = await operations.tagCommit(pkg.tag);
+
     if (tagged !== null && tagged !== head) {
       throw new Error(`${pkg.tag} already points to a different commit`);
     }
+
     await operations.pushTag(pkg.tag, head, tagged !== null);
+
     if (!(await operations.releaseExists(pkg.tag))) await operations.createRelease(pkg.tag);
   }
   return plan;
@@ -76,8 +91,11 @@ async function waitForPublication(pkg, operations) {
   let delay = 2_000;
   for (;;) {
     const published = await operations.published(pkg);
+
     if (published !== null) return published;
+
     const remaining = deadline - now();
+
     if (remaining <= 0) {
       throw new Error(
         `${pkg.tag} is not visible on npm after waiting 2 minutes; ` +
@@ -85,6 +103,7 @@ async function waitForPublication(pkg, operations) {
           "The dispatch revision must still be current main; otherwise see docs/releases.md for recovery.",
       );
     }
+
     await sleep(Math.min(delay, remaining));
     delay = Math.min(delay * 2, 30_000);
   }
@@ -99,6 +118,7 @@ function optionalGitRef(ref) {
     return run("git", ["rev-parse", "--verify", `${ref}^{commit}`]);
   } catch (error) {
     if (error.status === 128) return null;
+
     throw error;
   }
 }
@@ -108,9 +128,13 @@ async function published(pkg) {
     `https://registry.npmjs.org/${encodeURIComponent(pkg.name)}/${encodeURIComponent(pkg.version)}`,
     { signal: AbortSignal.timeout(30_000) },
   );
+
   if (response.status === 404) return null;
+
   if (!response.ok) throw new Error(`npm lookup for ${pkg.name} failed: HTTP ${response.status}`);
+
   const metadata = await response.json();
+
   if (
     metadata.name !== pkg.name ||
     metadata.version !== pkg.version ||
@@ -118,17 +142,21 @@ async function published(pkg) {
   ) {
     throw new Error(`Invalid npm metadata for ${pkg.name}@${pkg.version}`);
   }
+
   return metadata;
 }
 
 async function main() {
   const mode = process.argv[2];
+
   if (!["--plan", "--prepare", "--execute"].includes(mode)) {
     throw new Error(
       "Use --plan for a read-only plan; --prepare/--execute are reserved for release.yml",
     );
   }
+
   const head = run("git", ["rev-parse", "HEAD"]);
+
   if (
     mode !== "--plan" &&
     (process.env.GITHUB_ACTIONS !== "true" ||
@@ -137,6 +165,7 @@ async function main() {
   ) {
     throw new Error("Publication must run from the reviewed main revision in GitHub Actions");
   }
+
   const packages = readdirSync("packages")
     .sort()
     .map((directory) => JSON.parse(readFileSync(`packages/${directory}/package.json`, "utf8")));
@@ -150,6 +179,7 @@ async function main() {
     },
     pushTag: async (tag, revision, exists) => {
       if (!exists) run("git", ["tag", tag, revision]);
+
       run("git", ["push", "origin", `refs/tags/${tag}`]);
     },
     releaseExists: async (tag) => {
@@ -165,13 +195,16 @@ async function main() {
   };
   const planPath = ".release/plan.json";
   const recorded = existsSync(planPath) ? JSON.parse(readFileSync(planPath, "utf8")) : undefined;
+
   if (mode === "--execute" && recorded === undefined) {
     throw new Error("Prepare and persist the release plan before publishing");
   }
+
   const plan =
     mode === "--execute"
       ? await releasePackages(packages, head, operations, recorded)
       : await planReleases(packages, head, operations, recorded);
+
   if (mode === "--prepare") {
     mkdirSync(".release", { recursive: true });
     writeFileSync(
@@ -183,6 +216,7 @@ async function main() {
       ) + "\n",
     );
   }
+
   console.log(
     JSON.stringify(
       plan.map(({ name, version, tag, publish }) => ({ name, version, tag, publish })),
