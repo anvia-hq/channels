@@ -139,4 +139,23 @@ describe("normalizeSlackCommand", () => {
       },
     });
   });
+
+  it("rejects malformed command socket events", () => {
+    const base = {
+      type: "command" as const,
+      eventId: "trigger-1",
+      teamId: "T1",
+      channelId: "D1",
+      channelType: "im" as const,
+      senderId: "U1",
+      name: "ask",
+      text: "hello",
+      botUserId: "B1",
+    };
+
+    expect(normalizeSlackEvent({ ...base, eventId: "" })).toBeUndefined();
+    expect(normalizeSlackEvent({ ...base, channelId: "bad-channel" })).toBeUndefined();
+    expect(normalizeSlackEvent({ ...base, name: "" })).toBeUndefined();
+    expect(normalizeSlackEvent({ ...base, senderId: "123" })).toBeUndefined();
+  });
 });

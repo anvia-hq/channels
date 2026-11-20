@@ -16,12 +16,14 @@ export function validateSlackTimestamp(value: string, label: string): void {
 
 const SLACK_DOWNLOAD_DOMAINS = ["slack.com", "slack-files.com", "slack-gov.com"];
 
-/** True for HTTPS URLs hosted on Slack-controlled file domains. */
 export function isSlackDownloadUrl(value: unknown): value is string {
   if (typeof value !== "string" || value.length === 0) return false;
+
   try {
     const url = new URL(value);
+
     if (url.protocol !== "https:") return false;
+
     return SLACK_DOWNLOAD_DOMAINS.some(
       (domain) => url.hostname === domain || url.hostname.endsWith(`.${domain}`),
     );
@@ -30,14 +32,16 @@ export function isSlackDownloadUrl(value: unknown): value is string {
   }
 }
 
-/** Portable sent IDs retain file ownership across serialization and process restarts. */
 export function parseSlackMessageId(
   value: string,
 ): Readonly<{ timestamp: string; fileIds: readonly string[] }> {
   if (typeof value !== "string") throw new TypeError("Slack message ID must be a string");
+
   const [timestamp, ...fileIds] = value.split(":");
+
   if (!isSlackTimestamp(timestamp) || fileIds.some((id) => !isSlackId(id) || !id.startsWith("F"))) {
     throw new TypeError("Slack message ID must be a Slack timestamp with optional file IDs");
   }
+
   return { timestamp, fileIds };
 }

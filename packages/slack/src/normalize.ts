@@ -7,6 +7,8 @@ import type {
   ChannelMessageEvent,
 } from "@anvia/channel";
 import { isChannelActionId } from "@anvia/channel";
+import { attachmentTypeFromMediaType } from "@anvia/channel/adapter";
+import type { Mutable } from "@anvia/channel/adapter";
 import { isSlackId, isSlackTimestamp } from "./identifiers.js";
 import type {
   SlackSocketAction,
@@ -18,22 +20,29 @@ import type {
   SlackSocketReaction,
 } from "./types.js";
 
-type Mutable<T> = { -readonly [Key in keyof T]: T[Key] };
+const SLACK_CHANNEL_TYPES = new Set(["channel", "group", "im", "mpim", "app_home"]);
 
 export function normalizeSlackEvent(
   event: SlackSocketEvent,
 ): ChannelEvent<SlackSocketEvent> | undefined {
   if (event.type === "action") return normalizeSlackAction(event);
+
   if (event.type === "command") return normalizeSlackCommand(event);
+
   if (event.type === "message-edited") return normalizeSlackEdit(event);
+
   if (event.type === "message-deleted") return normalizeSlackDelete(event);
+
   if (event.type === "reaction") return normalizeSlackReaction(event);
+
   return normalizeSlackMessage(event);
 }
 
 export function normalizeSlackCommand(
   command: SlackSocketCommand,
-): ChannelCommandEvent<SlackSocketEvent> {
+): ChannelCommandEvent<SlackSocketEvent> | undefined {
+  if (!validSlackCommand(command)) return undefined;
+
   return {
     type: "command",
     id: command.eventId,
@@ -71,10 +80,34 @@ export function normalizeSlackMessage(
       message.type === "app_mention" || message.text.includes(`<@${message.botUserId}>`),
     raw: message,
   };
+
   if (message.threadTimestamp !== undefined && message.threadTimestamp !== message.timestamp) {
     event.replyTo = { messageId: message.threadTimestamp };
   }
+
   return event;
+}
+
+export function normalizeSlackAction(
+  action: SlackSocketAction,
+): ChannelActionEvent<SlackSocketAction> | undefined {
+  if (!validSlackAction(action)) return undefined;
+
+  return {
+    type: "action",
+    id: action.eventId,
+    platform: "slack",
+    accountId: action.teamId,
+    conversation: conversation(
+      action.channelId,
+      conversationKind(action.channelType),
+      action.threadTimestamp,
+    ),
+    sender: sender(action.senderId, false, action.senderDisplayName),
+    messageId: action.messageTimestamp,
+    actionId: action.actionId,
+    raw: action,
+  };
 }
 
 function normalizeSlackEdit(
@@ -91,6 +124,7 @@ function normalizeSlackEdit(
   ) {
     return undefined;
   }
+
   return {
     type: "message-edited",
     id: event.eventId,
@@ -109,6 +143,7 @@ function normalizeSlackDelete(
   event: SlackSocketMessageDeleted,
 ): ChannelEvent<SlackSocketMessageDeleted> | undefined {
   if (!validLifecycleBase(event)) return undefined;
+
   return {
     type: "message-deleted",
     id: event.eventId,
@@ -132,6 +167,7 @@ function normalizeSlackReaction(
   ) {
     return undefined;
   }
+
   return {
     type: "reaction",
     id: event.eventId,
@@ -154,7 +190,7 @@ function validLifecycleBase(
     event.eventId.length > 0 &&
     isSlackId(event.teamId) &&
     isSlackId(event.channelId) &&
-    ["channel", "group", "im", "mpim", "app_home"].includes(event.channelType) &&
+    SLACK_CHANNEL_TYPES.has(event.channelType) &&
     isSlackTimestamp(event.messageTimestamp) &&
     (event.threadTimestamp === undefined || isSlackTimestamp(event.threadTimestamp)) &&
     isSlackId(event.botUserId)
@@ -176,33 +212,14 @@ function normalizedFile(file: SlackSocketMessage["files"][number]) {
     size?: number;
   } = {
     id: file.id,
-    type: attachmentType(file.mediaType),
+    type: attachmentTypeFromMediaType(file.mediaType),
     mediaType: file.mediaType,
     filename: file.name,
   };
-  if (file.size !== undefined) attachment.size = file.size;
-  return attachment;
-}
 
-export function normalizeSlackAction(
-  action: SlackSocketAction,
-): ChannelActionEvent<SlackSocketAction> | undefined {
-  if (!validSlackAction(action)) return undefined;
-  return {
-    type: "action",
-    id: action.eventId,
-    platform: "slack",
-    accountId: action.teamId,
-    conversation: conversation(
-      action.channelId,
-      conversationKind(action.channelType),
-      action.threadTimestamp,
-    ),
-    sender: sender(action.senderId, false, action.senderDisplayName),
-    messageId: action.messageTimestamp,
-    actionId: action.actionId,
-    raw: action,
-  };
+  if (file.size !== undefined) attachment.size = file.size;
+
+  return attachment;
 }
 
 function conversation(
@@ -211,12 +228,31 @@ function conversation(
   threadId?: string,
 ): ChannelConversation {
   if (threadId === undefined) return { id, kind };
+
   return { id, kind, threadId };
 }
 
 function sender(id: string, bot: boolean, displayName?: string) {
   if (displayName === undefined) return { id, bot };
+
   return { id, displayName, bot };
+}
+
+function validSlackCommand(command: SlackSocketCommand): boolean {
+  return (
+    command.type === "command" &&
+    typeof command.eventId === "string" &&
+    command.eventId.length > 0 &&
+    isSlackId(command.teamId) &&
+    isSlackId(command.channelId) &&
+    SLACK_CHANNEL_TYPES.has(command.channelType) &&
+    isSlackId(command.senderId) &&
+    (command.senderDisplayName === undefined || typeof command.senderDisplayName === "string") &&
+    typeof command.name === "string" &&
+    command.name.length > 0 &&
+    typeof command.text === "string" &&
+    isSlackId(command.botUserId)
+  );
 }
 
 function validSlackAction(action: SlackSocketAction): boolean {
@@ -226,7 +262,7 @@ function validSlackAction(action: SlackSocketAction): boolean {
     action.eventId.length > 0 &&
     isSlackId(action.teamId) &&
     isSlackId(action.channelId) &&
-    ["channel", "group", "im", "mpim", "app_home"].includes(action.channelType) &&
+    SLACK_CHANNEL_TYPES.has(action.channelType) &&
     isSlackTimestamp(action.messageTimestamp) &&
     (action.threadTimestamp === undefined || isSlackTimestamp(action.threadTimestamp)) &&
     isSlackId(action.senderId) &&
@@ -239,7 +275,9 @@ function validSlackAction(action: SlackSocketAction): boolean {
 
 function conversationKind(channelType: SlackSocketMessage["channelType"]): ChannelConversationKind {
   if (channelType === "im" || channelType === "app_home") return "direct";
+
   if (channelType === "mpim") return "group";
+
   return "channel";
 }
 
@@ -273,11 +311,4 @@ function validFile(file: SlackSocketMessage["files"][number]): boolean {
     (file.size === undefined || (Number.isSafeInteger(file.size) && file.size >= 0)) &&
     typeof file.privateDownloadUrl === "string"
   );
-}
-
-function attachmentType(mediaType: string): "image" | "audio" | "video" | "file" {
-  if (mediaType.startsWith("image/")) return "image";
-  if (mediaType.startsWith("audio/")) return "audio";
-  if (mediaType.startsWith("video/")) return "video";
-  return "file";
 }

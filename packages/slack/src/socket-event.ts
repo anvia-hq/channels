@@ -1,4 +1,6 @@
 import { isChannelActionId } from "@anvia/channel";
+import { isRecord } from "@anvia/channel/adapter";
+import type { Mutable } from "@anvia/channel/adapter";
 import { isSlackDownloadUrl, isSlackId, isSlackTimestamp } from "./identifiers.js";
 import type {
   SlackChannelType,
@@ -12,8 +14,6 @@ import type {
   SlackSocketMessageEdited,
 } from "./types.js";
 
-type Mutable<T> = { -readonly [Key in keyof T]: T[Key] };
-
 export function parseSlackSocketEvent(
   body: unknown,
   identity: SlackIdentity,
@@ -21,25 +21,37 @@ export function parseSlackSocketEvent(
   if (!isRecord(body) || body.type !== "event_callback" || !nonemptyString(body.event_id)) {
     return undefined;
   }
+
   const event = body.event;
+
   if (!isRecord(event)) {
     return undefined;
   }
+
   const lifecycle = parseLifecycleEvent(body, event, identity);
+
   if (lifecycle !== undefined) return lifecycle;
+
   if (event.type !== "message" && event.type !== "app_mention") return undefined;
+
   if (!supportedSubtype(event.type, event.subtype)) return undefined;
+
   if (!isSlackId(event.channel) || !isSlackTimestamp(event.ts) || typeof event.text !== "string") {
     return undefined;
   }
+
   const files = slackFiles(event.files);
+
   if (files === undefined || (event.text.length === 0 && files.length === 0)) return undefined;
 
-  const senderId = isSlackId(event.user)
-    ? event.user
-    : isSlackId(event.bot_id)
-      ? event.bot_id
-      : undefined;
+  let senderId: string | undefined;
+
+  if (isSlackId(event.user)) {
+    senderId = event.user;
+  } else if (isSlackId(event.bot_id)) {
+    senderId = event.bot_id;
+  }
+
   if (senderId === undefined) return undefined;
 
   const teamId = isSlackId(body.team_id) ? body.team_id : identity.teamId;
@@ -61,8 +73,11 @@ export function parseSlackSocketEvent(
     files,
     botUserId: identity.botUserId,
   };
+
   if (threadTimestamp !== undefined) message.threadTimestamp = threadTimestamp;
+
   if (senderDisplayName !== undefined) message.senderDisplayName = senderDisplayName;
+
   return message;
 }
 
@@ -74,8 +89,10 @@ function parseLifecycleEvent(
   | Exclude<SlackSocketEvent, SlackSocketAction | SlackSocketCommand | SlackSocketMessage>
   | undefined {
   const teamId = isSlackId(body.team_id) ? body.team_id : identity.teamId;
+
   if (event.type === "reaction_added" || event.type === "reaction_removed") {
     const item = event.item;
+
     if (
       !isRecord(item) ||
       item.type !== "message" ||
@@ -86,6 +103,7 @@ function parseLifecycleEvent(
     ) {
       return undefined;
     }
+
     return {
       type: "reaction",
       eventId: body.event_id as string,
@@ -99,9 +117,12 @@ function parseLifecycleEvent(
       botUserId: identity.botUserId,
     };
   }
+
   if (event.type !== "message" || !isSlackId(event.channel)) return undefined;
+
   if (event.subtype === "message_deleted") {
     if (!isSlackTimestamp(event.deleted_ts)) return undefined;
+
     const previous = isRecord(event.previous_message) ? event.previous_message : undefined;
     const threadTimestamp =
       previous !== undefined && isSlackTimestamp(previous.thread_ts)
@@ -116,20 +137,32 @@ function parseLifecycleEvent(
       messageTimestamp: event.deleted_ts,
       botUserId: identity.botUserId,
     };
+
     if (threadTimestamp !== undefined) deleted.threadTimestamp = threadTimestamp;
+
     return deleted;
   }
+
   if (event.subtype !== "message_changed" || !isRecord(event.message)) return undefined;
+
   const message = event.message;
+
   if (!isSlackTimestamp(message.ts) || typeof message.text !== "string") return undefined;
+
   const files = slackFiles(message.files);
+
   if (files === undefined) return undefined;
-  const senderId = isSlackId(message.user)
-    ? message.user
-    : isSlackId(message.bot_id)
-      ? message.bot_id
-      : undefined;
+
+  let senderId: string | undefined;
+
+  if (isSlackId(message.user)) {
+    senderId = message.user;
+  } else if (isSlackId(message.bot_id)) {
+    senderId = message.bot_id;
+  }
+
   if (senderId === undefined) return undefined;
+
   const threadTimestamp = isSlackTimestamp(message.thread_ts) ? message.thread_ts : undefined;
   const senderDisplayName = displayName(message.user_profile);
   const edited: Mutable<SlackSocketMessageEdited> = {
@@ -146,8 +179,11 @@ function parseLifecycleEvent(
     files,
     botUserId: identity.botUserId,
   };
+
   if (threadTimestamp !== undefined) edited.threadTimestamp = threadTimestamp;
+
   if (senderDisplayName !== undefined) edited.senderDisplayName = senderDisplayName;
+
   return edited;
 }
 
@@ -155,13 +191,14 @@ export function parseSlackSocketCommand(
   body: unknown,
   identity: SlackIdentity,
 ): SlackSocketCommand | undefined {
-  // The Socket Mode SDK dispatches on the outer request type ("slash_commands")
-  // and passes only the inner payload as the body, so the payload itself has no
-  // discriminator field. The transport has already routed by request type.
   if (!isRecord(body)) return undefined;
+
   if (typeof body.command !== "string") return undefined;
+
   const name = body.command.replace(/^\//, "").trim();
+
   if (name.length === 0) return undefined;
+
   if (
     !isSlackId(body.channel_id) ||
     !isSlackId(body.user_id) ||
@@ -170,6 +207,7 @@ export function parseSlackSocketCommand(
   ) {
     return undefined;
   }
+
   const command: Mutable<SlackSocketCommand> = {
     type: "command",
     eventId: body.trigger_id,
@@ -181,7 +219,9 @@ export function parseSlackSocketCommand(
     text: typeof body.text === "string" ? body.text.trim() : "",
     botUserId: identity.botUserId,
   };
+
   if (nonemptyString(body.user_name)) command.senderDisplayName = body.user_name;
+
   return command;
 }
 
@@ -190,11 +230,13 @@ export function parseSlackSocketInteraction(
   identity: SlackIdentity,
 ): SlackSocketAction | undefined {
   if (!isRecord(body) || body.type !== "block_actions") return undefined;
+
   const team = body.team;
   const channel = body.channel;
   const user = body.user;
   const message = body.message;
   const actions = body.actions;
+
   if (
     !isRecord(team) ||
     !isSlackId(team.id) ||
@@ -212,6 +254,7 @@ export function parseSlackSocketInteraction(
   ) {
     return undefined;
   }
+
   const threadTimestamp = isSlackTimestamp(message.thread_ts) ? message.thread_ts : undefined;
   const eventId = nonemptyString(body.trigger_id)
     ? body.trigger_id
@@ -228,14 +271,19 @@ export function parseSlackSocketInteraction(
     actionTimestamp: actions[0].action_ts,
     botUserId: identity.botUserId,
   };
+
   if (threadTimestamp !== undefined) action.threadTimestamp = threadTimestamp;
+
   if (nonemptyString(user.name)) action.senderDisplayName = user.name;
+
   return action;
 }
 
 function slackFiles(value: unknown): readonly SlackFile[] | undefined {
   if (value === undefined) return [];
+
   if (!Array.isArray(value)) return undefined;
+
   const files: SlackFile[] = [];
   for (const candidate of value) {
     if (
@@ -246,8 +294,11 @@ function slackFiles(value: unknown): readonly SlackFile[] | undefined {
     ) {
       return undefined;
     }
+
     const privateDownloadUrl = candidate.url_private_download ?? candidate.url_private;
+
     if (!isSlackDownloadUrl(privateDownloadUrl)) return undefined;
+
     const file: Mutable<SlackFile> = {
       id: candidate.id,
       name: nonemptyString(candidate.name) ? candidate.name : candidate.id,
@@ -256,7 +307,9 @@ function slackFiles(value: unknown): readonly SlackFile[] | undefined {
         : "application/octet-stream",
       privateDownloadUrl,
     };
+
     if (candidate.size !== undefined) file.size = Number(candidate.size);
+
     files.push(file);
   }
   return files;
@@ -264,6 +317,7 @@ function slackFiles(value: unknown): readonly SlackFile[] | undefined {
 
 function supportedSubtype(type: "message" | "app_mention", subtype: unknown): boolean {
   if (subtype === undefined) return true;
+
   return type === "message" && (subtype === "thread_broadcast" || subtype === "file_share");
 }
 
@@ -276,13 +330,17 @@ function slackChannelType(value: unknown, channelId: string): SlackChannelType {
     case "app_home":
       return value;
   }
+
   if (channelId.startsWith("D")) return "im";
+
   if (channelId.startsWith("G")) return "group";
+
   return "channel";
 }
 
 function displayName(value: unknown): string | undefined {
   if (!isRecord(value)) return undefined;
+
   for (const candidate of [value.display_name, value.real_name, value.name]) {
     if (nonemptyString(candidate)) return candidate;
   }
@@ -291,8 +349,4 @@ function displayName(value: unknown): string | undefined {
 
 function nonemptyString(value: unknown): value is string {
   return typeof value === "string" && value.length > 0;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }

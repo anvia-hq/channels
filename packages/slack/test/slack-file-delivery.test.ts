@@ -70,7 +70,7 @@ describe("Slack file delivery", () => {
       }),
     );
     api.mockClear();
-    await slack(options).delete(JSON.parse(JSON.stringify(sent)));
+    await slack(options).delete(structuredClone(sent));
     expect(api).toHaveBeenCalledWith("files.delete", { file: "F1" });
     expect(api).toHaveBeenCalledWith("files.delete", { file: "F2" });
     expect(api).toHaveBeenCalledWith("chat.delete", { channel: "C1", ts: timestamp });
@@ -100,9 +100,12 @@ describe("Slack file delivery", () => {
     api.mockImplementation(async (method, options) => {
       if (method === "files.info") {
         lookups += 1;
+
         if (lookups === 1) throw new Error("temporary API failure");
+
         if (lookups === 2) return { ok: true, file: {} };
       }
+
       return normal(method, options);
     });
     const sent = channel.send(address, { text: "report", attachments: [attachment] });
@@ -120,7 +123,9 @@ describe("Slack file delivery", () => {
     const failure = new Error("completion response lost");
     api.mockImplementation(async (method, options) => {
       if (method === "files.completeUploadExternal") throw failure;
+
       if (method === "files.info" && options?.file === "F1") return { ok: true, file: {} };
+
       return normal(method, options);
     });
     await expect(
@@ -141,7 +146,9 @@ describe("Slack file delivery", () => {
       api.mockImplementation(async (method, options) => {
         if (method === "files.completeUploadExternal" && lostCompletion)
           throw new Error("response lost");
+
         if (method === "files.info") throw new Error("lookup unavailable");
+
         return normal(method, options);
       });
       const result = channel
@@ -155,7 +162,9 @@ describe("Slack file delivery", () => {
       ).toBeLessThanOrEqual(8);
       expect(api).not.toHaveBeenCalledWith("files.delete", expect.anything());
       expect(api).not.toHaveBeenCalledWith("chat.delete", expect.anything());
+
       if (!(error instanceof SlackFileDeliveryError)) throw new Error("Expected recovery error");
+
       api.mockImplementation(normal);
       await error.retryCleanup();
       const calls = api.mock.calls.map(([method]) => method);
@@ -169,17 +178,22 @@ describe("Slack file delivery", () => {
     const normal = api.getMockImplementation()!;
     api.mockImplementation(async (method, options) => {
       if (method === "files.completeUploadExternal") throw new Error("response lost");
+
       if (method === "chat.delete") throw new Error("deletion unavailable");
+
       return normal(method, options);
     });
     const error: unknown = await channel
       .send(address, { text: "report", attachments: [attachment] })
       .catch((error: unknown) => error);
     expect(api).toHaveBeenCalledWith("files.delete", { file: "F1" });
+
     if (!(error instanceof SlackFileDeliveryError)) throw new Error("Expected recovery error");
+
     api.mockClear();
     api.mockImplementation(async (method, options) => {
       if (method === "files.info" || method === "files.delete") throw missing("file_not_found");
+
       return normal(method, options);
     });
     await error.retryCleanup();
@@ -195,6 +209,7 @@ describe("Slack file delivery", () => {
       .mockRejectedValueOnce(new Error("signed URL must stay private"));
     api.mockImplementation(async (method, options) => {
       if (method === "files.delete" && options?.file === "F1") throw new Error("cleanup failed");
+
       return normal(method, options);
     });
     await expect(
@@ -296,14 +311,19 @@ describe("Slack file delivery", () => {
       api.mockImplementation(async (method, options) => {
         if (method === "files.delete") {
           const id = String(options?.file);
+
           if (id === "F2" && !failed) {
             failed = true;
             throw new Error("try again");
           }
+
           if (deleted.has(id)) throw missing(missingCode);
+
           deleted.add(id);
         }
+
         if (method === "chat.delete") throw missing("message_not_found");
+
         return { ok: true };
       });
       await expect(channel.delete(sent)).rejects.toMatchObject({

@@ -1,13 +1,15 @@
 import { SocketModeClient } from "@slack/socket-mode";
-import { WebClient } from "@slack/web-api";
-import { splitChannelText } from "@anvia/channel";
-import type {
-  ChannelAttachmentData,
-  ChannelMessage,
-  ChannelOutboundAttachment,
-} from "@anvia/channel";
-import { ignoreSlackMissing, postSlackFiles } from "./file-delivery.js";
+import type { ChannelAttachmentData, ChannelMessage } from "@anvia/channel";
+import { BoundedSet, isRecord, reportErrorSafely } from "@anvia/channel/adapter";
+import type { Mutable } from "@anvia/channel/adapter";
+import { ignoreSlackMissing } from "./file-delivery.js";
 import { isSlackDownloadUrl, isSlackId, isSlackTimestamp } from "./identifiers.js";
+import {
+  createSlackWebClient,
+  sanitizeSlackMessage,
+  slackMessageBody,
+} from "./slack-web-client.js";
+import type { SlackWebClient } from "./slack-web-client.js";
 import {
   parseSlackSocketCommand,
   parseSlackSocketEvent,
@@ -16,39 +18,16 @@ import {
 import type {
   SlackIdentity,
   SlackSentMessage,
+  SlackSocketEvent,
   SlackTransport,
   SlackTransportHandler,
 } from "./types.js";
 
+export { slackMessageBody };
+export type { SlackWebClient };
+
 const MAX_REMEMBERED_KEYS = 1_000;
 const DEFAULT_MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024;
-
-type Mutable<T> = { -readonly [Key in keyof T]: T[Key] };
-
-export type SlackWebClient = Readonly<{
-  authenticate(): Promise<unknown>;
-  postMessage(
-    channelId: string,
-    threadTimestamp: string | undefined,
-    message: ChannelMessage,
-  ): Promise<unknown>;
-  updateMessage(channelId: string, timestamp: string, message: ChannelMessage): Promise<unknown>;
-  deleteMessage(channelId: string, timestamp: string): Promise<unknown>;
-  addReaction(channelId: string, timestamp: string, reaction: string): Promise<unknown>;
-  removeReaction(channelId: string, timestamp: string, reaction: string): Promise<unknown>;
-  postFileMessage(
-    channelId: string,
-    threadTimestamp: string | undefined,
-    message: ChannelMessage,
-    maximumBytes: number,
-  ): Promise<SlackSentMessage>;
-  deleteFile(fileId: string): Promise<unknown>;
-  downloadFile(
-    url: string,
-    maximumBytes: number,
-    signal?: AbortSignal,
-  ): Promise<ChannelAttachmentData>;
-}>;
 
 export type SlackSocketTransportOptions = Readonly<{
   appToken: string;
@@ -64,8 +43,8 @@ export class SlackSocketTransport implements SlackTransport {
   private readonly onError: SlackSocketTransportOptions["onError"];
   private readonly maximumAttachmentBytes: number;
   private readonly deliveries = new Set<Promise<void>>();
-  private readonly rememberedEvents = new Set<string>();
-  private readonly rememberedMessages = new Set<string>();
+  private readonly rememberedEvents = new BoundedSet<string>(MAX_REMEMBERED_KEYS);
+  private readonly rememberedMessages = new BoundedSet<string>(MAX_REMEMBERED_KEYS);
   private slackEventListener: ((request: unknown) => void) | undefined;
   private socketErrorListener: ((error: unknown) => void) | undefined;
   private running = false;
@@ -74,12 +53,15 @@ export class SlackSocketTransport implements SlackTransport {
     validateToken(options.appToken, "Slack app-level token");
     validateToken(options.botToken, "Slack bot token");
     this.socket = new SocketModeClient({ appToken: options.appToken });
-    this.web = webClient ?? slackWebClient(options.botToken, options.fetch ?? globalThis.fetch);
+    this.web =
+      webClient ?? createSlackWebClient(options.botToken, options.fetch ?? globalThis.fetch);
     this.onError = options.onError;
     this.maximumAttachmentBytes = options.maximumAttachmentBytes ?? DEFAULT_MAX_ATTACHMENT_BYTES;
+
     if (!Number.isSafeInteger(this.maximumAttachmentBytes) || this.maximumAttachmentBytes <= 0) {
       throw new TypeError("Slack maximum attachment size must be a positive integer");
     }
+
     this.socket.on("reconnecting", () => {
       void this.reportError(new Error("Slack Socket Mode connection lost; reconnecting"));
     });
@@ -92,7 +74,9 @@ export class SlackSocketTransport implements SlackTransport {
     if (this.running) {
       throw new Error("Slack Socket Mode transport is already running");
     }
+
     if (typeof handler !== "function") throw new TypeError("Slack transport handler is required");
+
     this.running = true;
 
     let identity: SlackIdentity;
@@ -102,11 +86,11 @@ export class SlackSocketTransport implements SlackTransport {
       this.running = false;
       throw error;
     }
+
     if (!this.running) return;
 
     const slackEventListener = (request: unknown) => {
-      let delivery: Promise<void>;
-      delivery = this.receive(request, identity, handler)
+      const delivery: Promise<void> = this.receive(request, identity, handler)
         .catch((error: unknown) => this.reportError(error))
         .finally(() => this.deliveries.delete(delivery));
       this.deliveries.add(delivery);
@@ -122,6 +106,7 @@ export class SlackSocketTransport implements SlackTransport {
 
     try {
       await this.socket.start();
+
       if (!this.running) await this.socket.disconnect();
     } catch (error) {
       this.detachListeners(slackEventListener, socketErrorListener);
@@ -137,9 +122,11 @@ export class SlackSocketTransport implements SlackTransport {
 
   async stop(): Promise<void> {
     if (!this.running) return;
+
     this.running = false;
     const slackEventListener = this.slackEventListener;
     const socketErrorListener = this.socketErrorListener;
+
     if (slackEventListener === undefined || socketErrorListener === undefined) return;
 
     this.detachListeners(slackEventListener, socketErrorListener);
@@ -156,6 +143,7 @@ export class SlackSocketTransport implements SlackTransport {
     message: ChannelMessage,
   ): Promise<SlackSentMessage> {
     const sanitized = sanitizeSlackMessage(message);
+
     if ((message.attachments?.length ?? 0) > 0) {
       return this.web.postFileMessage(
         channelId,
@@ -164,6 +152,7 @@ export class SlackSocketTransport implements SlackTransport {
         this.maximumAttachmentBytes,
       );
     }
+
     return sentMessage(
       await this.web.postMessage(channelId, threadTimestamp, sanitized),
       threadTimestamp,
@@ -179,6 +168,7 @@ export class SlackSocketTransport implements SlackTransport {
       await this.web.deleteMessage(channelId, timestamp);
       return;
     }
+
     const results = await Promise.allSettled(
       fileIds.map((fileId) =>
         ignoreSlackMissing(() => this.web.deleteFile(fileId), "file_not_found"),
@@ -187,8 +177,7 @@ export class SlackSocketTransport implements SlackTransport {
     const failures: unknown[] = results.flatMap((result) =>
       result.status === "rejected" ? [result.reason] : [],
     );
-    // Deleting the last file can remove its share message as well. Always attempt
-    // message deletion, even when one or more file deletions failed.
+
     try {
       await ignoreSlackMissing(
         () => this.web.deleteMessage(channelId, timestamp),
@@ -197,6 +186,7 @@ export class SlackSocketTransport implements SlackTransport {
     } catch (error) {
       failures.push(error);
     }
+
     if (failures.length > 0) {
       throw new AggregateError(failures, "Slack message deletion was incomplete");
     }
@@ -217,17 +207,21 @@ export class SlackSocketTransport implements SlackTransport {
     if (file.size !== undefined && file.size > this.maximumAttachmentBytes) {
       throw new RangeError(`Slack attachment must not exceed ${this.maximumAttachmentBytes} bytes`);
     }
+
     if (!isSlackDownloadUrl(file.privateDownloadUrl)) {
       throw new TypeError("Slack attachment download URL is not a Slack-controlled HTTPS URL");
     }
+
     return this.web.downloadFile(file.privateDownloadUrl, this.maximumAttachmentBytes, signal);
   }
 
   private async authenticate(): Promise<SlackIdentity> {
     const response = await this.web.authenticate();
+
     if (!isRecord(response) || !isSlackId(response.team_id) || !isSlackId(response.user_id)) {
       throw new TypeError("Slack auth.test response is invalid");
     }
+
     return { teamId: response.team_id, botUserId: response.user_id };
   }
 
@@ -237,26 +231,36 @@ export class SlackSocketTransport implements SlackTransport {
     handler: SlackTransportHandler,
   ): Promise<void> {
     const request = socketRequest(value);
+
     if (request === undefined) return;
+
     await request.ack();
-    const event =
-      request.type === "events_api"
-        ? parseSlackSocketEvent(request.body, identity)
-        : request.type === "interactive"
-          ? parseSlackSocketInteraction(request.body, identity)
-          : request.type === "slash_commands"
-            ? parseSlackSocketCommand(request.body, identity)
-            : undefined;
-    if (event === undefined) return;
-    const eventKey = `${request.type}:${event.eventId}`;
-    if (this.rememberedEvents.has(eventKey)) return;
-    remember(this.rememberedEvents, eventKey);
-    if (event.type === "message" || event.type === "app_mention") {
-      // Slack can deliver both event types for one message, with different event IDs.
-      const messageKey = `message:${event.teamId}:${event.channelId}:${event.timestamp}`;
-      if (this.rememberedMessages.has(messageKey)) return;
-      remember(this.rememberedMessages, messageKey);
+    let event: SlackSocketEvent | undefined;
+
+    if (request.type === "events_api") {
+      event = parseSlackSocketEvent(request.body, identity);
+    } else if (request.type === "interactive") {
+      event = parseSlackSocketInteraction(request.body, identity);
+    } else if (request.type === "slash_commands") {
+      event = parseSlackSocketCommand(request.body, identity);
     }
+
+    if (event === undefined) return;
+
+    const eventKey = `${request.type}:${event.eventId}`;
+
+    if (this.rememberedEvents.has(eventKey)) return;
+
+    this.rememberedEvents.add(eventKey);
+
+    if (event.type === "message" || event.type === "app_mention") {
+      const messageKey = `message:${event.teamId}:${event.channelId}:${event.timestamp}`;
+
+      if (this.rememberedMessages.has(messageKey)) return;
+
+      this.rememberedMessages.add(messageKey);
+    }
+
     await handler(event);
   }
 
@@ -266,18 +270,15 @@ export class SlackSocketTransport implements SlackTransport {
   ): void {
     this.socket.off("slack_event", slackEventListener);
     this.socket.off("error", socketErrorListener);
+
     if (this.slackEventListener === slackEventListener) {
       this.slackEventListener = undefined;
       this.socketErrorListener = undefined;
     }
   }
 
-  private async reportError(error: unknown): Promise<void> {
-    try {
-      await this.onError?.(error);
-    } catch {
-      // Error observers must not terminate Socket Mode delivery.
-    }
+  private reportError(error: unknown): Promise<void> {
+    return reportErrorSafely(this.onError, error);
   }
 }
 
@@ -291,6 +292,7 @@ function socketRequest(value: unknown):
   if (!isRecord(value) || typeof value.type !== "string" || typeof value.ack !== "function") {
     return undefined;
   }
+
   const ack = value.ack;
   return {
     type: value.type,
@@ -299,140 +301,11 @@ function socketRequest(value: unknown):
   };
 }
 
-function slackWebClient(
-  botToken: string,
-  fetchImplementation: typeof globalThis.fetch,
-): SlackWebClient {
-  const client = new WebClient(botToken);
-  return {
-    authenticate: () => client.auth.test(),
-    postMessage: (channelId, threadTimestamp, message) => {
-      const request = {
-        channel: channelId,
-        ...slackMessageBody(message),
-        link_names: false,
-        unfurl_links: false,
-        unfurl_media: false,
-      } as Parameters<typeof client.chat.postMessage>[0];
-      if (threadTimestamp !== undefined) request.thread_ts = threadTimestamp;
-      return client.chat.postMessage(request);
-    },
-    updateMessage: (channelId, timestamp, message) =>
-      client.chat.update({
-        channel: channelId,
-        ts: timestamp,
-        ...slackMessageBody(message, true),
-        link_names: false,
-      } as Parameters<typeof client.chat.update>[0]),
-    deleteMessage: (channelId, timestamp) =>
-      client.chat.delete({ channel: channelId, ts: timestamp }),
-    addReaction: (channelId, timestamp, reaction) =>
-      client.reactions.add({ channel: channelId, timestamp, name: reaction }),
-    removeReaction: (channelId, timestamp, reaction) =>
-      client.reactions.remove({ channel: channelId, timestamp, name: reaction }),
-    postFileMessage: async (channelId, threadTimestamp, message, maximumBytes) => {
-      const files = [];
-      for (const attachment of message.attachments ?? []) {
-        files.push({
-          file: await outboundAttachmentBytes(attachment, fetchImplementation, maximumBytes),
-          filename: attachment.filename ?? "attachment",
-        });
-      }
-      return postSlackFiles(
-        client,
-        fetchImplementation,
-        channelId,
-        threadTimestamp,
-        slackMessageBody(message),
-        files,
-      );
-    },
-    deleteFile: (fileId) => client.files.delete({ file: fileId }),
-    downloadFile: async (url, maximumBytes, signal) => {
-      if (!isSlackDownloadUrl(url)) {
-        throw new TypeError("Slack file download URL is not a Slack-controlled HTTPS URL");
-      }
-      try {
-        const request: RequestInit = {
-          headers: { authorization: `Bearer ${botToken}` },
-          redirect: "error",
-        };
-        if (signal !== undefined) request.signal = signal;
-        const response = await fetchImplementation(url, request);
-        if (!response.ok) {
-          throw new Error(`Slack file download failed with HTTP ${response.status}`);
-        }
-        return { type: "data", data: await readResponseBase64(response, maximumBytes) };
-      } catch (error) {
-        if (error instanceof RangeError || signal?.aborted === true) throw error;
-        throw new Error("Slack file download failed");
-      }
-    },
-  };
-}
-
-async function outboundAttachmentBytes(
-  attachment: ChannelOutboundAttachment,
-  fetchImplementation: typeof globalThis.fetch,
-  maximumBytes: number,
-): Promise<Buffer> {
-  if (attachment.size !== undefined && attachment.size > maximumBytes) {
-    throw new RangeError(`Slack attachment must not exceed ${maximumBytes} bytes`);
-  }
-  if (attachment.source.type === "data") {
-    const bytes = Buffer.from(attachment.source.data, "base64");
-    if (bytes.byteLength > maximumBytes) {
-      throw new RangeError(`Slack attachment must not exceed ${maximumBytes} bytes`);
-    }
-    return bytes;
-  }
-  let response: Response;
-  try {
-    response = await fetchImplementation(attachment.source.url, { redirect: "error" });
-  } catch {
-    // Fetch errors may contain a signed attachment URL.
-    throw new Error("Slack attachment download failed");
-  }
-  if (!response.ok) {
-    throw new Error(`Slack attachment download failed with HTTP ${response.status}`);
-  }
-  return Buffer.from(await readResponseBase64(response, maximumBytes), "base64");
-}
-
-async function readResponseBase64(response: Response, maximumBytes: number): Promise<string> {
-  const contentLength = response.headers.get("content-length");
-  if (contentLength !== null && /^\d+$/.test(contentLength)) {
-    const declaredBytes = Number(contentLength);
-    if (declaredBytes > maximumBytes) {
-      throw new RangeError(`Slack attachment must not exceed ${maximumBytes} bytes`);
-    }
-  }
-
-  if (response.body === null) return "";
-  const reader = response.body.getReader();
-  const chunks: Uint8Array[] = [];
-  let totalBytes = 0;
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    if (totalBytes + value.byteLength > maximumBytes) {
-      try {
-        await reader.cancel();
-      } catch {
-        // The size violation is the useful error even if stream cancellation fails.
-      }
-      throw new RangeError(`Slack attachment must not exceed ${maximumBytes} bytes`);
-    }
-    chunks.push(value);
-    totalBytes += value.byteLength;
-  }
-  return Buffer.concat(chunks, totalBytes).toString("base64");
-}
-
 function sentMessage(value: unknown, fallbackThread: string | undefined): SlackSentMessage {
   if (!isRecord(value) || !isSlackId(value.channel) || !isSlackTimestamp(value.ts)) {
     throw new TypeError("Slack chat.postMessage response is invalid");
   }
+
   const responseThread =
     isRecord(value.message) && isSlackTimestamp(value.message.thread_ts)
       ? value.message.thread_ts
@@ -441,80 +314,14 @@ function sentMessage(value: unknown, fallbackThread: string | undefined): SlackS
     channelId: value.channel,
     timestamp: value.ts,
   };
+
   if (responseThread !== undefined) sent.threadTimestamp = responseThread;
+
   return sent;
-}
-
-function sanitizeSlackText(text: string): string {
-  return text.replace(/<([@#!])([^>\n]+)>/g, "&lt;$1$2&gt;");
-}
-
-function sanitizeSlackMessage(message: ChannelMessage): ChannelMessage {
-  const sanitized: {
-    text: string;
-    actions?: NonNullable<ChannelMessage["actions"]>;
-    attachments?: NonNullable<ChannelMessage["attachments"]>;
-    replyToMessageId?: string;
-  } = {
-    // Slack requires a text fallback even when the visible content is only a file.
-    text: message.text.length === 0 ? "\u200b" : sanitizeSlackText(message.text),
-  };
-  if (message.actions !== undefined) sanitized.actions = message.actions;
-  if (message.attachments !== undefined) sanitized.attachments = message.attachments;
-  if (message.replyToMessageId !== undefined) {
-    sanitized.replyToMessageId = message.replyToMessageId;
-  }
-  return sanitized;
-}
-
-export function slackMessageBody(
-  message: ChannelMessage,
-  editing = false,
-): Readonly<Record<string, unknown>> {
-  const actions = message.actions;
-  if (actions === undefined) {
-    if (editing) return { text: message.text, blocks: [] };
-    return { text: message.text };
-  }
-  return {
-    text: message.text,
-    blocks: [
-      ...splitChannelText({ text: message.text, maximumLength: 3_000 }).map((text) => ({
-        type: "section",
-        text: { type: "mrkdwn", text },
-      })),
-      {
-        type: "actions",
-        elements: actions.map((action) => {
-          const button: Record<string, unknown> = {
-            type: "button",
-            action_id: action.id,
-            value: action.id,
-            text: { type: "plain_text", text: action.label },
-          };
-          if (action.style !== undefined && action.style !== "default") {
-            button.style = action.style;
-          }
-          return button;
-        }),
-      },
-    ],
-  };
 }
 
 function validateToken(value: string, label: string): void {
   if (typeof value !== "string" || value.trim().length === 0) {
     throw new TypeError(`${label} must not be empty`);
   }
-}
-
-function remember(values: Set<string>, value: string): void {
-  values.add(value);
-  if (values.size <= MAX_REMEMBERED_KEYS) return;
-  const oldest = values.values().next().value;
-  if (oldest !== undefined) values.delete(oldest);
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
