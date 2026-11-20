@@ -1,6 +1,6 @@
 {
   "name": "@anvia/telegram",
-  "version": "0.3.3",
+  "version": "0.3.4",
   "description": "Telegram channel adapter for Anvia.",
   "license": "MIT",
   "type": "module",
