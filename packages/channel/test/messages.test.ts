@@ -204,7 +204,9 @@ describe("channel message delivery edges", () => {
       async edit(): Promise<void> {},
       async send(): Promise<SentChannelMessage> {
         calls += 1;
+
         if (calls === 2) throw cause;
+
         return { id: String(calls), address };
       },
     } satisfies Channel;
@@ -214,6 +216,7 @@ describe("channel message delivery edges", () => {
       address,
       message: { text: "abcdefghij" },
     }).catch((error: unknown) => error);
+
     if (!(failure instanceof PartialDeliveryError)) throw new Error("Expected partial failure");
 
     expect(failure.sent).toEqual([{ id: "1", address }]);

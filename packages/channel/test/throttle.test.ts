@@ -27,6 +27,7 @@ class RecordingChannel implements Channel {
 
   async emit(event: Parameters<ChannelEventHandler>[0]): Promise<void> {
     if (this.handler === undefined) throw new Error("not running");
+
     await this.handler(event);
   }
 
@@ -59,9 +60,11 @@ describe("createRateLimitedChannel", () => {
 
     expect(inner.callTimes).toHaveLength(3);
     const [first, second, third] = inner.callTimes;
+
     if (first === undefined || second === undefined || third === undefined) {
       throw new Error("expected three paced calls");
     }
+
     expect(second - first).toBeGreaterThanOrEqual(20);
     expect(third - second).toBeGreaterThanOrEqual(20);
     await channel.stop();
@@ -86,5 +89,41 @@ describe("createRateLimitedChannel", () => {
     });
     await channel.stop();
     expect(inner.sent).toEqual([]);
+  });
+
+  it("preserves the inner channel RawEvent generic type", async () => {
+    type CustomRaw = Readonly<{ rawId: number }>;
+    let observedRawId: number | undefined;
+    let emitInner: ChannelEventHandler<CustomRaw> | undefined;
+    const inner: Channel<CustomRaw> = {
+      platform: "custom",
+      splitMessage: (message) => [message],
+      async start(handler) {
+        emitInner = handler;
+      },
+      async stop() {},
+      async send(address) {
+        return { id: "1", address };
+      },
+    };
+    const channel: Channel<CustomRaw> = createRateLimitedChannel({
+      channel: inner,
+      minimumIntervalMs: 10,
+    });
+    await channel.start(async (event) => {
+      observedRawId = event.raw.rawId;
+    });
+    await emitInner?.({
+      type: "message",
+      id: "1",
+      platform: "custom",
+      conversation: { id: "c1", kind: "direct" },
+      sender: { id: "u1", bot: false },
+      text: "hi",
+      attachments: [],
+      mentionedBot: false,
+      raw: { rawId: 42 },
+    });
+    expect(observedRawId).toBe(42);
   });
 });
