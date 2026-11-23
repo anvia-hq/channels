@@ -1,5 +1,29 @@
 # @anvia/discord
 
+## 0.3.4
+
+### Patch Changes
+
+- a438f6e: Upgrade to `@anvia/core` 1.21.0, add shared zero-dependency adapter utilities under `@anvia/channel/adapter`, and fix edge-case bugs across the channel runtime and adapters:
+
+  - `@anvia/channel`: export `@anvia/channel/adapter` utilities (`readBoundedResponseBuffer`, `attachmentTypeFromMediaType`, `base64ByteLength`, `validateOutboundChannelMessage`, `BoundedSet`, `BoundedMap`, `reportChannelError`, `reportErrorSafely`) and preserve the `RawEvent` generic parameter on `createRateLimitedChannel`.
+  - `@anvia/channel-agent`: update `@anvia/core` peer/dev range to `^1.21.0`, redact embedded credential values in approval previews via `@anvia/core/redaction`, ensure placeholder edits preserve actions when text matches streamed output, validate and report `PartialDeliveryError` on multi-part provisional deliveries, route interaction cancel store errors through `onError`, and propagate stream abort reasons accurately.
+  - `@anvia/discord`: enforce full runtime payload validation in `normalizeDiscordCommand`, unify thread/conversation and attachment normalization, and decompose gateway internals.
+  - `@anvia/slack`: enforce runtime payload validation in `normalizeSlackCommand`, eliminate unnecessary Base64 round-trips on outbound URL attachments, and decompose Socket Mode transport internals.
+  - `@anvia/telegram`: retry HTTP 429 responses on multipart attachment uploads, handle pre-aborted signals during rate-limit waits, classify audio/video documents consistently by media type, and decompose parser and polling internals.
+
+- 922c614: Acknowledge every incoming interaction. Unsupported interaction types (context menus, select
+  menus, modal submits) and interactions whose payload cannot be read now get an ephemeral reply and
+  are reported through `onError` instead of showing "This interaction failed" while the application
+  stays blind. Autocomplete interactions are answered with an empty result, and a rejected
+  `deferReply`/`deferUpdate` is reported instead of silently dropping the command or button click.
+- c0cd68d: Deliver a channel post when a deferred command reply cannot be edited, and serialize concurrent
+  sends inside one command handler. An expired interaction token, a deleted placeholder message or a
+  Discord error used to discard the agent's whole answer and delete the deferred reply; the failure is
+  now reported through `onError` and the answer is posted to the channel instead.
+- Updated dependencies [a438f6e]
+  - @anvia/channel@0.5.0
+
 ## 0.3.3
 
 ### Patch Changes
