@@ -1,5 +1,12 @@
 # @anvia/slack
 
+## 0.4.3
+
+### Patch Changes
+
+- 266b195: Require `undici` `^7.30.1`, the first release without the cache poisoning, TLS validation, and
+  WebSocket denial-of-service advisories that affect `7.30.0`.
+
 ## 0.4.2
 
 ### Patch Changes
