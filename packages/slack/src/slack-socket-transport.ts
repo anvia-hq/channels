@@ -43,8 +43,8 @@ export class SlackSocketTransport implements SlackTransport {
   private readonly onError: SlackSocketTransportOptions["onError"];
   private readonly maximumAttachmentBytes: number;
   private readonly deliveries = new Set<Promise<void>>();
-  private readonly rememberedEvents = new BoundedSet<string>(MAX_REMEMBERED_KEYS);
-  private readonly rememberedMessages = new BoundedSet<string>(MAX_REMEMBERED_KEYS);
+  private readonly handledEvents = new BoundedSet<string>(MAX_REMEMBERED_KEYS);
+  private readonly activeEvents = new BoundedSet<string>(MAX_REMEMBERED_KEYS);
   private slackEventListener: ((request: unknown) => void) | undefined;
   private socketErrorListener: ((error: unknown) => void) | undefined;
   private running = false;
@@ -247,21 +247,27 @@ export class SlackSocketTransport implements SlackTransport {
 
     if (event === undefined) return;
 
-    const eventKey = `${request.type}:${event.eventId}`;
+    await this.deliverOnce(request.type, event, handler);
+  }
 
-    if (this.rememberedEvents.has(eventKey)) return;
+  private async deliverOnce(
+    requestType: string,
+    event: SlackSocketEvent,
+    handler: SlackTransportHandler,
+  ): Promise<void> {
+    const keys = eventKeys(requestType, event);
 
-    this.rememberedEvents.add(eventKey);
+    if (keys.some((key) => this.handledEvents.has(key) || this.activeEvents.has(key))) return;
 
-    if (event.type === "message" || event.type === "app_mention") {
-      const messageKey = `message:${event.teamId}:${event.channelId}:${event.timestamp}`;
+    for (const key of keys) this.activeEvents.add(key);
 
-      if (this.rememberedMessages.has(messageKey)) return;
+    try {
+      await handler(event);
 
-      this.rememberedMessages.add(messageKey);
+      for (const key of keys) this.handledEvents.add(key);
+    } finally {
+      for (const key of keys) this.activeEvents.delete(key);
     }
-
-    await handler(event);
   }
 
   private detachListeners(
@@ -280,6 +286,14 @@ export class SlackSocketTransport implements SlackTransport {
   private reportError(error: unknown): Promise<void> {
     return reportErrorSafely(this.onError, error);
   }
+}
+
+function eventKeys(requestType: string, event: SlackSocketEvent): readonly string[] {
+  const eventKey = `${requestType}:${event.eventId}`;
+
+  if (event.type !== "message" && event.type !== "app_mention") return [eventKey];
+
+  return [eventKey, `message:${event.teamId}:${event.channelId}:${event.timestamp}`];
 }
 
 function socketRequest(value: unknown):
