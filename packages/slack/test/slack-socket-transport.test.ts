@@ -337,6 +337,20 @@ describe("SlackSocketTransport Web API delivery", () => {
     },
   );
 
+  it("retries a failed message instead of recording it as handled", async () => {
+    const { receive, handler } = fakeReceiver();
+    handler.mockRejectedValueOnce(new Error("provider failed"));
+    const first = messageRequest("Ev1", "app_mention");
+    const second = messageRequest("Ev2", "message");
+
+    await expect(receive(first)).rejects.toThrow("provider failed");
+    await receive(second);
+    await receive(second);
+
+    expect(handler).toHaveBeenCalledTimes(2);
+    expect(handler).toHaveBeenLastCalledWith(expect.objectContaining({ type: "message" }));
+  });
+
   it("keeps messages in different teams, channels, and timestamps independent", async () => {
     const { receive, handler } = fakeReceiver();
     const messages = [

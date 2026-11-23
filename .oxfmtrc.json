@@ -12,5 +12,13 @@
   "bracketSameLine": false,
   "bracketSpacing": true,
   "sortPackageJson": false,
-  "ignorePatterns": ["node_modules", "dist", "**/dist", "coverage", "**/coverage", "pnpm-lock.yaml"]
+  "ignorePatterns": [
+    "node_modules",
+    "dist",
+    "**/dist",
+    "coverage",
+    "**/coverage",
+    "pnpm-lock.yaml",
+    ".pi"
+  ]
 }
