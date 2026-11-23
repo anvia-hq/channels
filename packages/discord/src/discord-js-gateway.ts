@@ -35,8 +35,8 @@ type CommandReply = {
   interaction: ChatInputCommandInteraction;
   client: Client;
   active: boolean;
-  state: "pending" | "sending" | "replied";
-  inFlight?: Promise<DiscordGatewaySentMessage>;
+  state: "pending" | "sending" | "replied" | "fallback";
+  inFlight?: Promise<DiscordGatewaySentMessage | undefined>;
 };
 
 type GatewaySession = Readonly<{
@@ -143,38 +143,16 @@ export class DiscordJsGateway implements DiscordGateway {
     message: Parameters<DiscordGateway["send"]>[1],
   ): Promise<DiscordGatewaySentMessage> {
     const reply = this.commandReply.getStore();
+    const replyChannel = reply !== undefined && reply.interaction.channelId === channelId;
 
-    if (reply !== undefined && reply.interaction.channelId === channelId) {
+    if (replyChannel) {
       this.assertCommandReplyUsable(reply);
+      const sent = await this.sendThroughInteraction(reply, channelId, message);
+
+      if (sent !== undefined) return sent;
     }
 
     const files = await discordFiles(message, this.fetch, this.maximumAttachmentBytes);
-
-    if (reply !== undefined && reply.interaction.channelId === channelId) {
-      this.assertCommandReplyUsable(reply);
-
-      if (reply.state !== "replied") {
-        reply.state = "sending";
-        reply.inFlight = (async () => {
-          try {
-            const edited = await reply.interaction.editReply({
-              ...interactionReplyPayload(message),
-              files: files.map((file) => ({ attachment: file.data, name: file.name })),
-            });
-
-            if (edited === null) throw new Error("Discord command reply response is invalid");
-
-            reply.state = "replied";
-            return { id: edited.id, channelId };
-          } catch (error) {
-            reply.state = "pending";
-            throw error;
-          }
-        })();
-        return reply.inFlight;
-      }
-    }
-
     const request: {
       body: Readonly<Record<string, unknown>>;
       files?: NonNullable<RestRequest["files"]>;
@@ -186,6 +164,43 @@ export class DiscordJsGateway implements DiscordGateway {
 
     const response = await this.rest.post(Routes.channelMessages(channelId), request);
     return sentMessage(response);
+  }
+
+  private async sendThroughInteraction(
+    reply: CommandReply,
+    channelId: string,
+    message: Parameters<DiscordGateway["send"]>[1],
+  ): Promise<DiscordGatewaySentMessage | undefined> {
+    const files = await discordFiles(message, this.fetch, this.maximumAttachmentBytes);
+
+    if (reply.state === "sending" && reply.inFlight !== undefined) {
+      await reply.inFlight.catch(() => undefined);
+    }
+
+    this.assertCommandReplyUsable(reply);
+
+    if (reply.state !== "pending") return undefined;
+
+    reply.state = "sending";
+    const attempt: Promise<DiscordGatewaySentMessage | undefined> = (async () => {
+      try {
+        const edited = await reply.interaction.editReply({
+          ...interactionReplyPayload(message),
+          files: files.map((file) => ({ attachment: file.data, name: file.name })),
+        });
+
+        if (edited === null) throw new Error("Discord command reply response is invalid");
+
+        reply.state = "replied";
+        return { id: edited.id, channelId };
+      } catch (error) {
+        reply.state = "fallback";
+        await this.reportError(error);
+        return undefined;
+      }
+    })();
+    reply.inFlight = attempt;
+    return attempt;
   }
 
   async edit(
@@ -225,10 +240,6 @@ export class DiscordJsGateway implements DiscordGateway {
   private assertCommandReplyUsable(reply: CommandReply): void {
     if (!reply.active || reply.client !== this.session?.client) {
       throw new Error("Discord command handler is no longer active");
-    }
-
-    if (reply.state === "sending") {
-      throw new Error("Discord command reply is already being sent");
     }
   }
 
@@ -319,7 +330,7 @@ export class DiscordJsGateway implements DiscordGateway {
 
         await reply.inFlight?.catch(() => undefined);
 
-        if (reply.state === "pending") {
+        if (reply.state === "pending" || reply.state === "fallback") {
           try {
             await interaction.deleteReply();
           } catch (error) {
