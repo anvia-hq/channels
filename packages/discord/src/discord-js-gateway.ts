@@ -4,6 +4,7 @@ import {
   Client,
   Events,
   GatewayIntentBits,
+  MessageFlags,
   Partials,
   REST,
   Routes,
@@ -319,9 +320,13 @@ export class DiscordJsGateway implements DiscordGateway {
     if (interaction.isChatInputCommand()) {
       const command = gatewayCommandFromDiscord(interaction, client);
 
-      if (command === undefined) return;
+      if (command === undefined) {
+        await this.rejectInteraction(interaction, "Discord command interaction could not be read");
+        return;
+      }
 
-      await interaction.deferReply();
+      if (!(await this.acknowledgeInteraction(() => interaction.deferReply()))) return;
+
       const reply: CommandReply = { interaction, client, active: true, state: "pending" };
       try {
         await this.commandReply.run(reply, () => handler(command));
@@ -341,14 +346,55 @@ export class DiscordJsGateway implements DiscordGateway {
       return;
     }
 
-    if (!interaction.isButton()) return;
+    if (interaction.isButton()) {
+      const action = gatewayActionFromDiscord(interaction, client);
 
-    const action = gatewayActionFromDiscord(interaction, client);
+      if (action === undefined) {
+        await this.rejectInteraction(interaction, "Discord button interaction could not be read");
+        return;
+      }
 
-    if (action === undefined) return;
+      if (!(await this.acknowledgeInteraction(() => interaction.deferUpdate()))) return;
 
-    await interaction.deferUpdate();
-    await handler(action);
+      await handler(action);
+      return;
+    }
+
+    if (interaction.isAutocomplete()) {
+      await this.reportError(new TypeError("Discord autocomplete interactions are not supported"));
+      await this.acknowledgeInteraction(() => interaction.respond([]));
+      return;
+    }
+
+    await this.rejectInteraction(
+      interaction,
+      `Discord interaction type ${interaction.type} is not supported`,
+    );
+  }
+
+  private async acknowledgeInteraction(acknowledge: () => Promise<unknown>): Promise<boolean> {
+    try {
+      await acknowledge();
+      return true;
+    } catch (error) {
+      await this.reportError(error);
+      return false;
+    }
+  }
+
+  private async rejectInteraction(interaction: Interaction, description: string): Promise<void> {
+    await this.reportError(new TypeError(description));
+
+    if (!interaction.isRepliable()) return;
+
+    try {
+      await interaction.reply({
+        content: "This bot cannot handle this interaction.",
+        flags: MessageFlags.Ephemeral,
+      });
+    } catch (error) {
+      await this.reportError(error);
+    }
   }
 
   private teardownSession(session: GatewaySession): void {
