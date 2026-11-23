@@ -19,6 +19,11 @@ catalogs:
       specifier: ^5.0.2
       version: 5.0.2
 
+overrides:
+  undici@^6.0.0: ^6.29.1
+  undici@^7.0.0: ^7.30.1
+  zod@^4.0.0: 4.6.7
+
 importers:
 
   .:
@@ -52,16 +57,16 @@ importers:
         version: link:../../packages/channel-agent
       '@anvia/core':
         specifier: ^1.21.0
-        version: 1.21.0(zod@4.6.5)
+        version: 1.21.0(zod@4.6.7)
       '@anvia/discord':
         specifier: workspace:*
         version: link:../../packages/discord
       '@anvia/memory-sqlite':
         specifier: ^1.3.1
-        version: 1.3.1(@anvia/core@1.21.0(zod@4.6.5))
+        version: 1.3.1(@anvia/core@1.21.0(zod@4.6.7))
       '@anvia/openai':
         specifier: ^1.3.8
-        version: 1.3.8(@anvia/core@1.21.0(zod@4.6.5))(undici@7.30.0)(ws@8.22.0)(zod@4.6.5)
+        version: 1.3.8(@anvia/core@1.21.0(zod@4.6.7))(undici@6.29.1)(ws@8.22.0)(zod@4.6.7)
     devDependencies:
       tsx:
         specifier: 'catalog:'
@@ -77,13 +82,13 @@ importers:
         version: link:../../packages/channel-agent
       '@anvia/core':
         specifier: ^1.21.0
-        version: 1.21.0(zod@4.6.5)
+        version: 1.21.0(zod@4.6.7)
       '@anvia/memory-sqlite':
         specifier: ^1.3.1
-        version: 1.3.1(@anvia/core@1.21.0(zod@4.6.5))
+        version: 1.3.1(@anvia/core@1.21.0(zod@4.6.7))
       '@anvia/openai':
         specifier: ^1.3.8
-        version: 1.3.8(@anvia/core@1.21.0(zod@4.6.5))(undici@7.30.0)(ws@8.22.0)(zod@4.6.5)
+        version: 1.3.8(@anvia/core@1.21.0(zod@4.6.7))(undici@6.29.1)(ws@8.22.0)(zod@4.6.7)
       '@anvia/slack':
         specifier: workspace:*
         version: link:../../packages/slack
@@ -102,13 +107,13 @@ importers:
         version: link:../../packages/channel-agent
       '@anvia/core':
         specifier: ^1.21.0
-        version: 1.21.0(zod@4.6.5)
+        version: 1.21.0(zod@4.6.7)
       '@anvia/memory-sqlite':
         specifier: ^1.3.1
-        version: 1.3.1(@anvia/core@1.21.0(zod@4.6.5))
+        version: 1.3.1(@anvia/core@1.21.0(zod@4.6.7))
       '@anvia/openai':
         specifier: ^1.3.8
-        version: 1.3.8(@anvia/core@1.21.0(zod@4.6.5))(undici@7.30.0)(ws@8.22.0)(zod@4.6.5)
+        version: 1.3.8(@anvia/core@1.21.0(zod@4.6.7))(undici@6.29.1)(ws@8.22.0)(zod@4.6.7)
       '@anvia/telegram':
         specifier: workspace:*
         version: link:../../packages/telegram
@@ -140,7 +145,7 @@ importers:
     devDependencies:
       '@anvia/core':
         specifier: ^1.21.0
-        version: 1.21.0(zod@4.6.5)
+        version: 1.21.0(zod@4.6.7)
       tsup:
         specifier: 'catalog:'
         version: 8.5.1(postcss@8.5.33)(tsx@4.23.15)(typescript@7.0.2)(yaml@2.9.1)
@@ -177,13 +182,13 @@ importers:
         version: link:../channel
       '@slack/socket-mode':
         specifier: ^3.0.1
-        version: 3.0.1(undici@7.30.0)
+        version: 3.0.1(undici@7.30.2)
       '@slack/web-api':
         specifier: ^8.1.1
         version: 8.1.1
       undici:
-        specifier: ^7.30.0
-        version: 7.30.0
+        specifier: ^7.30.1
+        version: 7.30.2
     devDependencies:
       tsup:
         specifier: 'catalog:'
@@ -217,7 +222,7 @@ packages:
     resolution: {integrity: sha512-QzrmQDpIC/kDzhyoKZzBlAtrhVxj2v83USnVr4IooXjgM/iBHDzJToK2k7zyAi2zzFFl8BKddoxjKLPyY/pfog==}
     peerDependencies:
       '@valibot/to-json-schema': ^1.8.0
-      zod: ^4.6.7
+      zod: 4.6.7
     peerDependenciesMeta:
       '@valibot/to-json-schema':
         optional: true
@@ -1202,7 +1207,7 @@ packages:
     resolution: {integrity: sha512-7L4adgnJtQvQgo5cfIwqHG1QuR8mdZQ/WdMScNDp6uK644ZqnHDAa4rR+vZYfZFdJ5+obCqZQ66Dad8kcwJ4Jg==}
     engines: {node: '>=20', npm: '>=9.6.4'}
     peerDependencies:
-      undici: ^7.0.0
+      undici: ^7.30.1
 
   '@slack/types@3.1.0':
     resolution: {integrity: sha512-bTzqrO3lxJ5iWedo1eJKNAs1koyEhaTwKLJUkD3KETnPeQvD978AAE4jvWstUws8Gbbc4JR6iYE6F7XjE8UGmw==}
@@ -1644,9 +1649,9 @@ packages:
       '@smithy/hash-node': '>=4.3.0 <5'
       '@smithy/signature-v4': '>=5.4.0 <6'
       google-auth-library: '>=9.15.1 <12'
-      undici: '>=5 <9'
+      undici: ^6.29.1
       ws: ^8.21.0
-      zod: ^3.25 || ^4.0
+      zod: 4.6.7
     peerDependenciesMeta:
       '@aws-sdk/credential-provider-node':
         optional: true
@@ -1874,12 +1879,12 @@ packages:
   undici-types@8.9.0:
     resolution: {integrity: sha512-KTDyRTYX8sWmKXAikPHHSyc63CRPETMctyjKFupcC6OBLXT3xsN0e9aF7m+mIXutFWpUXuedtowG7iLOzp0kQg==}
 
-  undici@6.29.0:
-    resolution: {integrity: sha512-R+RODBqp6i2pPflGdq+xIOUkl+RNfGgHwoinecKu/JCuf2uO06cOKoDbI2P7Dn6KcswdKwrczbU6IYJ6K8X+wg==}
+  undici@6.29.1:
+    resolution: {integrity: sha512-EvRlUt/QqAEvXdQeRMYUfwOQsfzpDztykrG2owGEE/rBOBoYv9uF39ZzsNDh4lTFHhTr2XOZjKkYgueD12ZmGA==}
     engines: {node: '>=18.17'}
 
-  undici@7.30.0:
-    resolution: {integrity: sha512-dkrQXeHSaoamnItlYbmzG0wFYrM0ZwDxCIg0A7aKjTyyhh9svRzCNFEzV+Vm05/yehjCzjDZ31KXfGEjYSztDQ==}
+  undici@7.30.2:
+    resolution: {integrity: sha512-mLyPQnHwUxaM/rideoK/+KL8DaAJLRl4aBCfmX444aCSLnIaomqPLtNRe2jdCYcsk5wZzXrDIQC8ZeYNRAYyIA==}
     engines: {node: '>=20.18.1'}
 
   vite@8.2.2:
@@ -1988,24 +1993,24 @@ packages:
     engines: {node: '>= 14.6'}
     hasBin: true
 
-  zod@4.6.5:
-    resolution: {integrity: sha512-v5l/aFXZQeai4awLbOpSoHecE9UiMrnfx75tEXLjNonXVARxQ5mOeipTjROUchszUNCqnE+hqAMujRsRHsut2Q==}
+  zod@4.6.7:
+    resolution: {integrity: sha512-g8W2D2kU6a8untc053fX1uVBKzM7yqAxW/3zwk83+6RyF2+SKOuV+c0wBDhUwzV1PaGapmZH+rmcUzPf+3CGwg==}
 
 snapshots:
 
-  '@anvia/core@1.21.0(zod@4.6.5)':
+  '@anvia/core@1.21.0(zod@4.6.7)':
     dependencies:
       yaml: 2.9.1
-      zod: 4.6.5
+      zod: 4.6.7
 
-  '@anvia/memory-sqlite@1.3.1(@anvia/core@1.21.0(zod@4.6.5))':
+  '@anvia/memory-sqlite@1.3.1(@anvia/core@1.21.0(zod@4.6.7))':
     dependencies:
-      '@anvia/core': 1.21.0(zod@4.6.5)
+      '@anvia/core': 1.21.0(zod@4.6.7)
 
-  '@anvia/openai@1.3.8(@anvia/core@1.21.0(zod@4.6.5))(undici@7.30.0)(ws@8.22.0)(zod@4.6.5)':
+  '@anvia/openai@1.3.8(@anvia/core@1.21.0(zod@4.6.7))(undici@6.29.1)(ws@8.22.0)(zod@4.6.7)':
     dependencies:
-      '@anvia/core': 1.21.0(zod@4.6.5)
-      openai: 7.60.0(undici@7.30.0)(ws@8.22.0)(zod@4.6.5)
+      '@anvia/core': 1.21.0(zod@4.6.7)
+      openai: 7.60.0(undici@6.29.1)(ws@8.22.0)(zod@4.6.7)
     transitivePeerDependencies:
       - '@aws-sdk/credential-provider-node'
       - '@smithy/hash-node'
@@ -2159,7 +2164,7 @@ snapshots:
       discord-api-types: 0.38.55
       magic-bytes.js: 1.13.1
       tslib: 2.8.1
-      undici: 6.29.0
+      undici: 6.29.1
 
   '@discordjs/util@1.2.0':
     dependencies:
@@ -2651,13 +2656,13 @@ snapshots:
     dependencies:
       '@types/node': 26.6.3
 
-  '@slack/socket-mode@3.0.1(undici@7.30.0)':
+  '@slack/socket-mode@3.0.1(undici@7.30.2)':
     dependencies:
       '@slack/logger': 5.0.0
       '@slack/web-api': 8.1.1
       '@types/node': 26.6.3
       eventemitter3: 5.0.4
-      undici: 7.30.0
+      undici: 7.30.2
 
   '@slack/types@3.1.0': {}
 
@@ -2829,7 +2834,7 @@ snapshots:
       lodash.snakecase: 4.1.1
       magic-bytes.js: 1.13.1
       tslib: 2.8.1
-      undici: 6.29.0
+      undici: 6.29.1
     transitivePeerDependencies:
       - bufferutil
       - utf-8-validate
@@ -3034,11 +3039,11 @@ snapshots:
 
   obug@2.2.1: {}
 
-  openai@7.60.0(undici@7.30.0)(ws@8.22.0)(zod@4.6.5):
+  openai@7.60.0(undici@6.29.1)(ws@8.22.0)(zod@4.6.7):
     optionalDependencies:
-      undici: 7.30.0
+      undici: 6.29.1
       ws: 8.22.0
-      zod: 4.6.5
+      zod: 4.6.7
 
   oxfmt@0.70.0:
     dependencies:
@@ -3307,9 +3312,9 @@ snapshots:
 
   undici-types@8.9.0: {}
 
-  undici@6.29.0: {}
+  undici@6.29.1: {}
 
-  undici@7.30.0: {}
+  undici@7.30.2: {}
 
   vite@8.2.2(@types/node@26.6.3)(esbuild@0.27.7)(tsx@4.23.15)(yaml@2.9.1):
     dependencies:
@@ -3387,4 +3392,4 @@ snapshots:
 
   yaml@2.9.1: {}
 
-  zod@4.6.5: {}
+  zod@4.6.7: {}
