@@ -78,6 +78,55 @@ The candidate consumes seven changesets and versions only the five public packag
 - No live-platform scenarios were run in this validation. The platform matrix above remains
   unverified; offline checks do not establish live-platform readiness.
 
+## 23 November 2026 package release validation
+
+Validated Version Packages candidate `b5d17ee`, based on reviewed `main` after PR #48 (delivery
+recovery) merged. The candidate consumed four changesets — the Anvia 1.21.0 upgrade and refactor
+plus the three interaction and delivery fixes — and versions only the five public packages:
+
+| Package                | Version |
+| ---------------------- | ------- |
+| `@anvia/channel`       | 0.5.0   |
+| `@anvia/channel-agent` | 0.5.0   |
+| `@anvia/discord`       | 0.3.4   |
+| `@anvia/slack`         | 0.4.2   |
+| `@anvia/telegram`      | 0.3.4   |
+
+- `pnpm install --frozen-lockfile` passed without lockfile changes.
+- `pnpm verify:release` passed formatting, linting, strict typechecking, builds, 321 package tests
+  (`@anvia/channel` 24, `@anvia/channel-agent` 85, `@anvia/discord` 47, `@anvia/slack` 81,
+  `@anvia/telegram` 84) and 28 offline release-script and lint-plugin tests.
+- `pnpm -r pack --dry-run` passed. The five public packages contain built JavaScript, source maps,
+  declarations, package manifests, and README files; no credentials or platform fixtures are listed.
+  `@anvia/channel` publishes `dist/adapter.js` and `dist/adapter.d.ts` behind the new `./adapter`
+  subpath export.
+- The read-only release plan selected exactly these five unpublished versions, with no tag
+  conflicts and no publication from another revision.
+- `pnpm audit --prod --audit-level high` reported 8 high and 6 moderate advisories, all transitive:
+  `undici` 6.x through `discord.js → @discordjs/rest`, `undici` 7.x through `openai` in the
+  examples, and `zod` below 4.6.6 through `@anvia/core` in the examples. None of them resolve to
+  code in the published packages. This differs from the 20 October record, which reported a clean
+  audit; closing it needs a `pnpm.overrides` follow-up for `undici` and `zod`.
+- Release workflow run `45092156325` was dispatched from `b5d17ee` and passed every step. The
+  protected `npmjs` environment required and received approval before publication; trusted
+  publishing authenticated through OIDC, with no npm token involved.
+- Publication was verified independently of the workflow log: the registry reports `channel` 0.5.0,
+  `channel-agent` 0.5.0, `discord` 0.3.4, `slack` 0.4.2 and `telegram` 0.3.4 as `latest`; the five
+  `@anvia/<name>@<version>` tags point at `b5d17ee`; a GitHub release exists for every tag; and the
+  fetched tarballs contain the shipped fixes — the `./adapter` entry point in `@anvia/channel`, the
+  handled and in-flight dedupe sets in `@anvia/slack`, and the reply fallback plus interaction
+  reject paths in `@anvia/discord`.
+- No live-platform scenario was run. The platform matrix above is still entirely Not run; an
+  offline suite and a published tarball do not establish live-platform readiness. The Slack
+  redelivery path and the Discord interaction-token fallback have only been exercised against fakes.
+- The release log prints a benign `fatal: Needed a single revision` line for each tag the plan
+  inspects before it exists; `scripts/release-packages.mjs` treats exit status 128 as "tag absent".
+
+Code-level follow-ups from the same audit — conversation ordering under an async filter, the
+non-expiring pending interaction, the SQLite interaction row that cannot be recovered, the Discord
+thread identity split, and the Slack 75-character button label limit — are recorded on PR #48 and
+are not part of this publication.
+
 ## Publish gate
 
 Use [release and recovery](./releases.md) for trusted publisher configuration, independent package
