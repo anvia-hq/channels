@@ -28,8 +28,7 @@
   "dependencies": {
     "@anvia/channel": "workspace:*",
     "@slack/socket-mode": "^3.0.1",
-    "@slack/web-api": "^8.1.1",
-    "undici": "^7.30.1"
+    "@slack/web-api": "^8.1.1"
   },
   "repository": {
     "type": "git",
