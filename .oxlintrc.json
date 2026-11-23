@@ -12,7 +12,8 @@
     "**/dist",
     "coverage",
     "**/coverage",
-    "pnpm-lock.yaml"
+    "pnpm-lock.yaml",
+    ".pi"
   ],
   "jsPlugins": ["./tooling/oxlint/anvia-plugin.mjs"],
   "rules": {
